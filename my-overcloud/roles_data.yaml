@@ -208,6 +208,7 @@
     - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::Collectd
     - OS::TripleO::Services::ComputeCeilometerAgent
+    - OS::TripleO::Services::ComputeInstanceHA
     - OS::TripleO::Services::ComputeNeutronCorePlugin
     - OS::TripleO::Services::ComputeNeutronL3Agent
     - OS::TripleO::Services::ComputeNeutronMetadataAgent
@@ -228,6 +229,7 @@
     - OS::TripleO::Services::Ntp
     - OS::TripleO::Services::ContainersLogrotateCrond
     - OS::TripleO::Services::OpenDaylightOvs
+    - OS::TripleO::Services::PacemakerRemote
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::RsyslogSidecar
     - OS::TripleO::Services::Securetty

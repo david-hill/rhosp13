@@ -1,9 +1,9 @@
 resource_registry:
 #  OS::TripleO::BlockStorage::Net::SoftwareConfig: /home/stack/rhosp13/my-overcloud/network/config/single-nic-vlans/cinder-storage.yaml
-  OS::TripleO::Compute::Net::SoftwareConfig: /home/stack/rhosp13/my-overcloud/network/config/single-nic-vlans/compute.yaml
-  OS::TripleO::Controller::Net::SoftwareConfig: /home/stack/rhosp13/my-overcloud/network/config/single-nic-vlans/controller.yaml
+  OS::TripleO::Compute::Net::SoftwareConfig: /home/stack/rhosp13/my-overcloud/network/config/single-nic-vlans/compute-custom.yaml
+  OS::TripleO::Controller::Net::SoftwareConfig: /home/stack/rhosp13/my-overcloud/network/config/single-nic-vlans/controller-custom.yaml
 #  OS::TripleO::ObjectStorage::Net::SoftwareConfig: /home/stack/rhosp13/my-overcloud/network/config/single-nic-vlans/swift-storage.yaml
-  OS::TripleO::CephStorage::Net::SoftwareConfig: /home/stack/rhosp13/my-overcloud/network/config/single-nic-vlans/ceph-storage.yaml
+  OS::TripleO::CephStorage::Net::SoftwareConfig: /home/stack/rhosp13/my-overcloud/network/config/single-nic-vlans/ceph-storage-custom.yaml
   OS::TripleO::NodeUserData: /home/stack/rhosp13/my-overcloud/swap.yaml
 parameter_defaults:
   # Customize all these values to match the local environment
@@ -32,30 +32,13 @@ parameter_defaults:
   # Customize bonding options if required (will be ignored if bonds are not used)
   BondInterfaceOvsOptions:
       "bond_mode=balance-tcp lacp=active other-config:lacp-fallback-ab=true"
-  ControllerExtraConfig:
-    tripleo::haproxy::haproxy_default_timeout: ['http-request 10s','queue 2m','client 2m','server 5m','check 10s']
-    tripleo::haproxy::horizon::options:
-      timeout: 'server 5m'
   NovaComputeExtraConfig:
     nova::compute::reserved_host_memory: 512
-  ExtraConfig:
-    snmp::ro_network: 10.0.0.0/8
-    snmp::location: qai2
-    snmp::contact: noc@expertcity.com
-    tripleo::profile::base::snmp::snmpd_config:
-      - 'createUser ro_snmp_user MD5 "786566a5b0f7092091b9684438606b7ce08798f2"'
-      - 'rouser ro_snmp_user_tripleo'
-      - 'proc  cron'
-      - 'includeAllDisks  10%'
-      - 'master agentx'
-      - 'trapsink localhost public'
-      - 'iquerySecName internalUser'
-      - 'rouser internalUser'
-      - 'defaultMonitors yes'
-      - 'linkUpDownNotifications yes'
-      - 'proc httpd'
-      - 'proc heat-engine'
-      - 'proc neutron-server'
-      - 'proc rabbitmq-server'
-      - 'proc haproxy'
-
+    nova::config::nova_config:
+      DEFAULT/instance_name_template:
+        value: '%(hostname)s'
+  ComputeExtraConfig:
+    nova::config::nova_config:
+      DEFAULT/instance_name_template:
+        value: '%(hostname)s'
+  EnableFencing: true
