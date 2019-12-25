@@ -138,19 +138,17 @@ outputs:
                   - /var/lib/config-data/puppet-generated/opendaylight/:/var/lib/kolla/config_files/src:ro
                   - /var/lib/opendaylight/journal:/opt/opendaylight/journal
                   - /var/lib/opendaylight/snapshots:/opt/opendaylight/snapshots
-                  - /var/log/containers/opendaylight/karaf/logs:/opt/opendaylight/data/log
+                  - /var/lib/opendaylight/data:/opt/opendaylight/data
+                  - /var/log/containers/opendaylight:/opt/opendaylight/data/log
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       metadata_settings:
         get_attr: [OpenDaylightBase, role_data, metadata_settings]
       host_prep_tasks:
-        - name: Delete data and karaf folder
+        - name: Delete cache folder
           file:
-            path: "{{ item }}"
+            path: /var/lib/opendaylight/data/cache
             state: absent
-          with_items:
-            - /var/lib/opendaylight/data # Delete folder if present from previous deployment
-            - /var/lib/config-data/puppet-generated/opendaylight/opt/opendaylight/etc/opendaylight/karaf
         - name: create persistent directories
           file:
             path: "{{ item }}"
@@ -158,13 +156,14 @@ outputs:
           with_items:
             - /var/lib/opendaylight/snapshots
             - /var/lib/opendaylight/journal
+            - /var/lib/opendaylight/data
             - /var/log/opendaylight
-            - /var/log/containers/opendaylight/karaf/logs
+            - /var/log/containers/opendaylight
         - name: opendaylight logs readme
           copy:
             dest: /var/log/opendaylight/readme.txt
             content: |
-              Logs from opendaylight container can be found by running "sudo docker logs opendaylight_api" and are also available in /var/log/containers/opendaylight/karaf/logs/karaf.log
+              Logs from opendaylight container can be found by running "sudo docker logs opendaylight_api" and are also available in /var/log/containers/opendaylight/karaf.log
           ignore_errors: true
       upgrade_tasks:
         - when: step|int == 0
@@ -203,13 +202,14 @@ outputs:
                 name: opendaylight_api
                 state: stopped
               when: step|int == 0
-            - name: remove journal and snapshots
+            - name: remove data, journal and snapshots
               file:
                 path: /var/lib/opendaylight/{{item}}
                 state: absent
               with_items:
                 - snapshots
                 - journal
+                - data
               when: step|int == 0
             - name: Set ODL upgrade flag to True
               copy:
@@ -273,9 +273,9 @@ outputs:
               docker_container:
                 name: opendaylight_api
                 state: stopped
-            - name: Delete data folder
+            - name: Delete cache folder
               file:
-                path: /var/lib/opendaylight/data
+                path: /var/lib/opendaylight/data/cache
                 state: absent
           when:
             - step|int == 0

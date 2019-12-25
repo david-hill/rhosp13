@@ -46,9 +46,6 @@ resources:
   ContainersCommon:
     type: ./containers-common.yaml
 
-  MySQLClient:
-    type: ../../puppet/services/database/mysql-client.yaml
-
   OctaviaWorkerPuppetBase:
     type: ../../puppet/services/octavia-worker.yaml
     properties:
@@ -77,7 +74,6 @@ outputs:
             - "\n"
             - - "['nova_flavor'].each |String $val| { noop_resource($val) }"
               - {get_attr: [OctaviaWorkerPuppetBase, role_data, step_config]}
-              - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: DockerOctaviaConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/octavia_worker.json:
@@ -123,6 +119,15 @@ outputs:
                   - /var/log/containers/octavia:/var/log/octavia
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+      docker_puppet_tasks:
+        step_5:
+          config_volume: octavia
+          puppet_tags: nova_flavor
+          step_config:
+            get_attr: [OctaviaWorkerPuppetBase, role_data, step_config]
+          config_image: {get_param: DockerOctaviaConfigImage}
+          volumes:
+            - /var/lib/config-data/puppet-generated/nova/etc/nova:/etc/nova:ro
       host_prep_tasks:
         - name: create persistent logs directory
           file:

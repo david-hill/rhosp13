@@ -11,7 +11,3 @@ parameter_defaults:
   UpgradeInitCommonCommand: ''
   UpgradeInitCommand: ''
   UpgradeRemoveUnusedPackages: false
-  # Unset RHEL registration parameters to avoid
-  # re-registering on future stack updates.
-  RHELRegistrationActions: 'CREATE'
-  rhel_reg_force: ""
