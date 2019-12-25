@@ -363,7 +363,7 @@ DockerRegistry:
 
 OpenDaylight:
     Internal:
-        net_param: OpendaylightApi
+        net_param: OpenDaylightApi
     Admin:
-        net_param: OpendaylightApi
+        net_param: OpenDaylightApi
     port: 8081

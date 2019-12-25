@@ -54,14 +54,6 @@ OPTIONAL_DOCKER_SECTIONS = ['docker_puppet_tasks', 'upgrade_tasks',
                             'logging_source', 'logging_groups',
                             'external_deploy_tasks', 'external_post_deploy_tasks',
                             'docker_config_scripts', 'step_config']
-# ansible tasks cannot be an empty dict or ansible is unhappy
-ANSIBLE_TASKS_SECTIONS = ['upgrade_tasks', 'pre_upgrade_rolling_tasks',
-                          'fast_forward_upgrade_tasks',
-                          'fast_forward_post_upgrade_tasks',
-                          'post_upgrade_tasks',  'update_tasks',
-                          'post_update_tasks', 'host_prep_tasks',
-                          'external_deploy_tasks',
-                          'external_post_deploy_tasks' ]
 REQUIRED_DOCKER_PUPPET_CONFIG_SECTIONS = ['config_volume', 'step_config',
                                           'config_image']
 OPTIONAL_DOCKER_PUPPET_CONFIG_SECTIONS = [ 'puppet_tags', 'volumes' ]
@@ -220,15 +212,6 @@ def validate_endpoint_map(base_map, env_map):
     return sorted(base_map.keys()) == sorted(env_map.keys())
 
 
-def validate_role_name(filename):
-    role_data = yaml.load(open(filename).read())[0]
-    if role_data['name'] != os.path.basename(filename).split('.')[0]:
-            print('ERROR: role name should match file name for role : %s.'
-                  % filename)
-            return 1
-    return 0
-
-
 def validate_hci_compute_services_default(env_filename, env_tpl):
     env_services_list = env_tpl['parameter_defaults']['ComputeServices']
     env_services_list.remove('OS::TripleO::Services::CephOSD')
@@ -362,35 +345,6 @@ def validate_with_compute_role_services(role_filename, role_tpl, exclude_service
     return 0
 
 
-def validate_multiarch_compute_roles(role_filename, role_tpl):
-    errors = 0
-    roles_dir = os.path.dirname(role_filename)
-    compute_services = set(role_tpl[0].get('ServicesDefault', []))
-    compute_networks = set(role_tpl[0].get('networks', []))
-
-    for arch in ['ppc64le']:
-        arch_filename = os.path.join(roles_dir,
-                                     'Compute%s.yaml' % (arch.upper()))
-        with open(arch_filename) as f:
-            arch_tpl = yaml.safe_load(f)
-
-        arch_services = set(arch_tpl[0].get('ServicesDefault', []))
-        if compute_services != arch_services:
-            print('ERROR ServicesDefault in %s and %s do not match' %
-                  (role_filename, arch_filename))
-            print('ERROR problems with: %s' % (','.join(compute_services.symmetric_difference(arch_services))))
-            errors = 1
-
-        arch_networks = set(arch_tpl[0].get('networks', []))
-        if compute_networks != arch_networks:
-            print('ERROR networks in %s and %s do not match' %
-                  (role_filename, arch_filename))
-            print('ERROR problems with: %s' % (','.join(compute_networks.symmetric_difference(arch_networks))))
-            errors = 1
-
-    return errors
-
-
 def search(item, check_item, check_key):
     if check_item(item):
         return True
@@ -516,14 +470,6 @@ def validate_docker_service(filename, tpl):
                 continue
             else:
                 if section_name in OPTIONAL_DOCKER_SECTIONS:
-                    # check for LP##1768019
-                    if section_name in ANSIBLE_TASKS_SECTIONS and \
-                            role_data.get(section_name) == {}:
-                        print('ERROR: %s cannot be an empty dict. If not '
-                              'required please consider removing remove this '
-                              'option or setting it to [] or null' %
-                              section_name)
-                        return 1
                     continue
                 elif section_name in OPTIONAL_SECTIONS:
                     continue
@@ -764,9 +710,6 @@ def validate(filename, param_map):
         if filename.endswith('hyperconverged-ceph.yaml'):
             retval = validate_hci_compute_services_default(filename, tpl)
 
-        if filename.startswith('./roles/'):
-            retval = validate_role_name(filename)
-
         if filename.startswith('./roles/ComputeHCI.yaml'):
             retval = validate_hci_computehci_role(filename, tpl)
 
@@ -797,9 +740,6 @@ def validate(filename, param_map):
 
         if filename.startswith('./roles/ControllerNoCeph.yaml'):
             retval = validate_controller_no_ceph_role(filename, tpl)
-
-        if filename == './roles/Compute.yaml':
-            retval |= validate_multiarch_compute_roles(filename, tpl)
 
         if filename.startswith('./network_data_'):
             retval = validate_network_data_file(filename)
@@ -923,13 +863,8 @@ for base_path in path_args:
             if '.tox' in dirs:
                 dirs.remove('.tox')
             for f in files:
-                file_path = os.path.join(subdir, f)
-                if 'environments/services-docker' in file_path:
-                    print("WARNING: environments/services-docker should not be used "
-                          "any more, use environments/services instead: %s " %
-                          file_path)
-
                 if f.endswith('.yaml') and not f.endswith('.j2.yaml'):
+                    file_path = os.path.join(subdir, f)
                     failed = validate(file_path, param_map)
                     if failed:
                         failed_files.append(file_path)

@@ -44,17 +44,6 @@ parameters:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
-  PcmkConfigRestartTimeout:
-    default: 600
-    description: Time in seconds to wait for a pcmk resource to restart when
-                 a config change is detected and the resource is being restarted
-    type: number
-  DeployIdentifier:
-    default: ''
-    type: string
-    description: >
-      Setting this to a unique value will re-run any deployment tasks which
-      perform configuration on a Heat stack-update.
 
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
@@ -196,30 +185,8 @@ outputs:
               - /usr/bin:/usr/bin:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
         step_2:
-          rabbitmq_restart_bundle:
-            start_order: 0
-            config_volume: rabbitmq
-            detach: false
-            net: host
-            user: root
-            command:
-              - '/usr/bin/bootstrap_host_exec'
-              - 'rabbitmq'
-              - str_replace:
-                  template:
-                    'if /usr/sbin/pcs resource show rabbitmq-bundle; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT rabbitmq-bundle; echo "rabbitmq-bundle restart invoked"; fi'
-                  params:
-                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
-            image: {get_param: DockerRabbitmqImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - /dev/shm:/dev/shm:rw
-                  - /var/lib/config-data/puppet-generated/rabbitmq/:/var/lib/kolla/config_files/src:ro
           rabbitmq_init_bundle:
-            start_order: 1
+            start_order: 0
             detach: false
             net: host
             user: root
@@ -240,13 +207,6 @@ outputs:
                 - - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
                   - /dev/shm:/dev/shm:rw
                   - /bin/true:/bin/epmd
-            environment:
-              # NOTE: this should force this container to re-run on each
-              # update (scale-out, etc.)
-              - list_join:
-                  - ''
-                  - - 'TRIPLEO_DEPLOY_IDENTIFIER='
-                    - {get_param: DeployIdentifier}
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -356,7 +316,6 @@ outputs:
               register: rabbitmq_current_pcmklatest_id
             - name: Temporarily tag the current rabbitmq image id with the upgraded image name
               shell: "docker tag {{rabbitmq_current_pcmklatest_id.stdout}} {{rabbitmq_docker_image_latest}}"
-              when: rabbitmq_current_pcmklatest_id.stdout != ''
         - name: Check rabbitmq-bundle cluster resource status
           pacemaker_resource:
             resource: rabbitmq-bundle

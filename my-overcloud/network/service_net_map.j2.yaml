@@ -65,7 +65,7 @@ parameters:
       RedisNetwork: internal_api
       GaneshaNetwork: storage_nfs
       MysqlNetwork: internal_api
-      SnmpdNetwork: ctrlplane
+      SnmpdNetwork: internal_api
       CephClusterNetwork: storage_mgmt
       CephMonNetwork: storage
       CephRgwNetwork: storage
@@ -123,11 +123,7 @@ resources:
              - {get_param: ServiceNetMapDefaults}
              - values:
 {%- for network in networks %}
-{%- if network.service_net_map_replace is defined %}
-                 {{network.service_net_map_replace}}: {{network.name_lower}}
-{%- else %}
                  {{network.name_lower}}: {get_param: {{network.name}}NetName}
-{%- endif %}
 {%- endfor %}
           - map_replace:
              - {get_param: ServiceNetMap}

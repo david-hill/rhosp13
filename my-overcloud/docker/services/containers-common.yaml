@@ -64,9 +64,8 @@ outputs:
             # ignore copy failures as these may be the same file depending on docker mounts
             cp -a /tmp/puppet-etc/* /etc/puppet || true
           fi
-          echo "{\"step\": ${STEP}}" > /etc/puppet/hieradata/docker_puppet.json
-          # $::deployment_type in puppet-tripleo
-          export FACTER_deployment_type=containers
+          echo "{\"step\": ${STEP}}" > /etc/puppet/hieradata/docker.json
+          export FACTER_uuid=docker
           set +e
           puppet apply $EXTRA_ARGS \
               --verbose \
@@ -92,7 +91,6 @@ outputs:
           - /etc/localtime:/etc/localtime:ro
           # OpenSSL trusted CAs
           - /etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro
-          - /etc/pki/ca-trust/source/anchors:/etc/pki/ca-trust/source/anchors:ro
           - /etc/pki/tls/certs/ca-bundle.crt:/etc/pki/tls/certs/ca-bundle.crt:ro
           - /etc/pki/tls/certs/ca-bundle.trust.crt:/etc/pki/tls/certs/ca-bundle.trust.crt:ro
           - /etc/pki/tls/cert.pem:/etc/pki/tls/cert.pem:ro

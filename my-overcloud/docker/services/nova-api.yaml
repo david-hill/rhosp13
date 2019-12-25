@@ -39,10 +39,6 @@ parameters:
   EnableInternalTLS:
     type: boolean
     default: false
-  EnableOnlineDataMigrations:
-    type: boolean
-    description: Enable post-upgrade online data migrations.
-    default: true
   NovaDbSyncTimeout:
     default: 300
     description: Timeout for Nova db sync
@@ -65,7 +61,6 @@ parameters:
 conditions:
 
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-  online_data_migrations_enabled: {equals: [{get_param: EnableOnlineDataMigrations}, true]}
 
 resources:
 
@@ -87,16 +82,6 @@ resources:
 
   NovaApiLogging:
     type: OS::TripleO::Services::Logging::NovaApi
-
-  OnlineDataMigrationsCommand:
-    type: OS::Heat::Value
-    properties:
-      type: string
-      value:
-        if:
-          - online_data_migrations_enabled
-          - "/usr/bin/bootstrap_host_exec nova_api su nova -s /bin/bash -c '/usr/bin/nova-manage db online_data_migrations'"
-          - "/usr/bin/echo Online data migrations disabled via EnableOnlineDataMigrations parameter"
 
 outputs:
   role_data:
@@ -326,94 +311,66 @@ outputs:
                   - ''
                   - - 'TRIPLEO_DEPLOY_IDENTIFIER='
                     - {get_param: DeployIdentifier}
-          nova_online_migrations:
-            start_order: 2
-            image: *nova_api_image
-            net: host
-            detach: false
-            volumes: *nova_api_bootstrap_volumes
-            user: root
-            command: {get_attr: [OnlineDataMigrationsCommand, value]}
       metadata_settings:
         get_attr: [NovaApiBase, role_data, metadata_settings]
       host_prep_tasks: {get_attr: [NovaApiLogging, host_prep_tasks]}
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if nova_api is deployed
+          command: systemctl is-enabled --quiet openstack-nova-api
           tags: common
-          block:
-            - name: get bootstrap nodeid
-              command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
-              register: bootstrap_node
-            - name: set is_bootstrap_node fact
-              set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
-            - name: Check if nova_api is deployed
-              command: systemctl is-enabled --quiet openstack-nova-api
-              ignore_errors: True
-              register: nova_api_enabled_result
-            - set_fact:
-                nova_api_enabled: "{{ nova_api_enabled_result.rc == 0 }}"
-            - name: Check for nova-api running under apache
-              shell: httpd -t -D DUMP_VHOSTS | grep -q 'nova'
-              ignore_errors: True
-              register: nova_api_httpd_enabled_result
-            - set_fact:
-                nova_api_httpd_enabled: "{{ nova_api_httpd_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-nova-api is running"
-              command: systemctl is-active --quiet openstack-nova-api
-              tags: validation
-              when:
-                - nova_api_enabled|bool
-            - name: Check if httpd service is running
-              command: systemctl is-active --quiet httpd
-              ignore_errors: True
-              register: httpd_running_result
-              when: httpd_running is undefined
-            - set_fact:
-                httpd_running: "{{ httpd_running_result.rc == 0 }}"
-              when: httpd_running is undefined
-            - name: "PreUpgrade step0,validation: Check if nova_wsgi is running"
-              tags: validation
-              shell: systemctl status 'httpd' | grep -q 'nova'
-              when:
-                - nova_api_httpd_enabled|bool
-                - httpd_running|bool
-            # NOTE: In puppet service variant, we ran release N online
-            # migrations before upgrade to release N+1. In docker
-            # service variant, we run release N online migrations
-            # after upgrade to release N. This means that during
-            # switch from non-containerized to containerized, we need
-            # to run both of these.
-            - name: Online data migration for Nova before switching to containers
-              tags: pre-upgrade
-              when:
-                - is_bootstrap_node|bool
-                - (nova_api_httpd_enabled|bool and httpd_running|bool) or nova_api_enabled|bool
-              command: nova-manage db online_data_migrations
-        - when: step|int == 2
-          block:
-            - name: Stop and disable nova_api service
-              when:
-                - nova_api_enabled|bool
-              service: name=openstack-nova-api state=stopped enabled=no
-            - name: Stop nova_api service (running under httpd)
-              when:
-                - nova_api_httpd_enabled|bool
-                - httpd_running|bool
-              service: name=httpd state=stopped
-        - when: step|int == 3
-          block:
-            - name: Set fact for removal of openstack-nova-api package
-              set_fact:
-                remove_nova_api_package: {get_param: UpgradeRemoveUnusedPackages}
-            - name: Remove openstack-nova-api package if operator requests it
-              yum: name=openstack-nova-api state=removed
-              ignore_errors: True
-              when:
-                - remove_nova_api_package|bool
-            - name: remove old nova cron jobs
-              file:
-                path: /var/spool/cron/nova
-                state: absent
+          ignore_errors: True
+          register: nova_api_enabled
+        - name: Check for nova-api running under apache
+          tags: common
+          shell: httpd -t -D DUMP_VHOSTS | grep -q 'nova'
+          ignore_errors: True
+          register: httpd_enabled
+        - name: "PreUpgrade step0,validation: Check service openstack-nova-api is running"
+          command: systemctl is-active --quiet openstack-nova-api
+          tags: validation
+          when:
+            - step|int == 0
+            - nova_api_enabled.rc == 0
+            - httpd_enabled.rc != 0
+        - name: Stop and disable nova_api service
+          when:
+            - step|int == 2
+            - nova_api_enabled.rc == 0
+            - httpd_enabled.rc != 0
+          service: name=openstack-nova-api state=stopped enabled=no
+        - name: Check if httpd service is running
+          command: systemctl is-active --quiet httpd
+          tags: common
+          ignore_errors: True
+          register: httpd_running
+        - name: "PreUpgrade step0,validation: Check if nova_wsgi is running"
+          tags: validation
+          shell: systemctl status 'httpd' | grep -q 'nova'
+          when:
+            - step|int == 0
+            - httpd_enabled.rc == 0
+            - httpd_running.rc == 0
+        - name: Stop nova_api service (running under httpd)
+          when:
+            - step|int == 2
+            - httpd_enabled.rc == 0
+            - httpd_running.rc == 0
+          service: name=httpd state=stopped
+        - name: Set fact for removal of openstack-nova-api package
+          when: step|int == 2
+          set_fact:
+            remove_nova_api_package: {get_param: UpgradeRemoveUnusedPackages}
+        - name: Remove openstack-nova-api package if operator requests it
+          yum: name=openstack-nova-api state=removed
+          ignore_errors: True
+          when:
+            - step|int == 2
+            - remove_nova_api_package|bool
+        - name: remove old nova cron jobs
+          when: step|int == 2
+          file:
+            path: /var/spool/cron/nova
+            state: absent
       fast_forward_upgrade_tasks:
         - name: Check if nova-api is deployed
           command: systemctl is-enabled --quiet openstack-nova-api
@@ -451,6 +408,18 @@ outputs:
             - release == 'ocata'
             - is_bootstrap_node|bool
           block:
+            - name: Create cell0 db
+              mysql_db:
+                name: nova_cell0
+                state: present
+
+            - name: Grant access to cell0 db
+              mysql_user:
+                name: nova
+                host_all: yes
+                state: present
+                priv: '*.*:ALL'
+
             - name: Create puppet manifest to set transport_url in nova.conf
               copy:
                 dest: /root/nova-api_upgrade_manifest.pp
@@ -503,14 +472,6 @@ outputs:
               command: nova-manage cell_v2 discover_hosts --cell_uuid {{nova_api_cell_uuid.stdout}} --verbose
             - name: Setup cell_v2 (migrate instances)
               command: nova-manage cell_v2 map_instances --cell_uuid {{nova_api_cell_uuid.stdout}}
-        - name: Sync nova/cell DB
-          command: nova-manage db sync
-          async: {get_param: NovaDbSyncTimeout}
-          poll: 10
-          when:
-            - step|int == 8
-            - is_bootstrap_node|bool
-            - release == 'pike'
         - name: Sync nova_api DB
           command: nova-manage api_db sync
           when:

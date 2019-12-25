@@ -39,10 +39,6 @@ parameters:
   EnableInternalTLS:
     type: boolean
     default: false
-  EnableOnlineDataMigrations:
-    type: boolean
-    description: Enable post-upgrade online data migrations.
-    default: true
   UpgradeRemoveUnusedPackages:
     default: false
     description: Remove package if the service is being disabled during upgrade
@@ -51,7 +47,6 @@ parameters:
 conditions:
 
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-  online_data_migrations_enabled: {equals: [{get_param: EnableOnlineDataMigrations}, true]}
 
 resources:
 
@@ -70,16 +65,6 @@ resources:
       DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
-
-  OnlineDataMigrationsCommand:
-    type: OS::Heat::Value
-    properties:
-      type: string
-      value:
-        if:
-          - online_data_migrations_enabled
-          - "/usr/bin/bootstrap_host_exec cinder_api su cinder -s /bin/bash -c 'cinder-manage db online_data_migrations'"
-          - "/usr/bin/echo Online data migrations disabled via EnableOnlineDataMigrations parameter"
 
 outputs:
   role_data:
@@ -161,8 +146,6 @@ outputs:
             # NOTE(mandre) kolla image changes the user to 'cinder', we need it
             # to be root to run httpd
             user: root
-            healthcheck:
-              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -183,23 +166,6 @@ outputs:
                       - ''
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
-        step_5:
-          cinder_api_online_migrations:
-            start_order: 2
-            image: *cinder_api_image
-            net: host
-            privileged: false
-            detach: false
-            user: root
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/config-data/cinder/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
-                  - /var/lib/config-data/cinder/etc/cinder/:/etc/cinder/:ro
-                  - /var/log/containers/cinder:/var/log/cinder
-                  - /var/log/containers/httpd/cinder-api:/var/log/httpd
-            command: {get_attr: [OnlineDataMigrationsCommand, value]}
           cinder_api_cron:
             image: *cinder_api_image
             net: host
@@ -235,62 +201,47 @@ outputs:
               /var/log/containers/cinder and /var/log/containers/httpd/cinder-api.
           ignore_errors: true
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check is cinder_api is deployed
+          command: systemctl is-enabled openstack-cinder-api
           tags: common
-          block:
-            - name: get bootstrap nodeid
-              command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
-              register: bootstrap_node
-            - name: set is_bootstrap_node fact
-              set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
-            - name: Check is cinder_api is deployed
-              command: systemctl is-enabled openstack-cinder-api
-              ignore_errors: True
-              register: cinder_api_enabled_result
-            - name: Set fact cinder_api_enabled
-              set_fact:
-                cinder_api_enabled: "{{ cinder_api_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-cinder-api is running"
-              shell: systemctl is-active --quiet openstack-cinder-api
-              when: cinder_api_enabled|bool
-              tags: validation
-            # NOTE: In puppet service variant, we ran release N online
-            # migrations before upgrade to release N+1. In docker
-            # service variant, we run release N online migrations
-            # after upgrade to release N. This means that during
-            # switch from non-containerized to containerized, we need
-            # to run both of these.
-            - name: Online data migration for Cinder before switching to containers
-              tags: pre-upgrade
-              when:
-                - is_bootstrap_node|bool
-                - cinder_api_enabled|bool
-              command: cinder-manage db online_data_migrations
-        - when: step|int == 2
-          block:
-            - name: Stop and disable cinder_api service (pre-upgrade not under httpd)
-              service: name=openstack-cinder-api state=stopped enabled=no
-              when: cinder_api_enabled|bool
-            - name: check for cinder_api running under apache (post upgrade)
-              shell: "httpd -t -D DUMP_VHOSTS | grep -q cinder"
-              register: cinder_api_apache
-              ignore_errors: true
-            - name: Stop and disable cinder_api service
-              service: name=httpd state=stopped enabled=no
-              when: cinder_api_apache.rc == 0
-        - when: step|int == 3
-          block:
-            - name: remove old cinder cron jobs
-              file:
-                path: /var/spool/cron/cinder
-                state: absent
-            - name: Set fact for removal of httpd package
-              set_fact:
-                remove_httpd_package: {get_param: UpgradeRemoveUnusedPackages}
-            - name: Remove httpd package if operator requests it
-              yum: name=httpd state=removed
-              ignore_errors: True
-              when: remove_httpd_package|bool
+          ignore_errors: True
+          register: cinder_api_enabled
+        - name: "PreUpgrade step0,validation: Check service openstack-cinder-api is running"
+          shell: systemctl is-active --quiet openstack-cinder-api
+          when:
+            - step|int == 0
+            - cinder_api_enabled.rc == 0
+          tags: validation
+        - name: Stop and disable cinder_api service (pre-upgrade not under httpd)
+          service: name=openstack-cinder-api state=stopped enabled=no
+          when:
+            - step|int == 2
+            - cinder_api_enabled.rc == 0
+        - name: check for cinder_api running under apache (post upgrade)
+          shell: "httpd -t -D DUMP_VHOSTS | grep -q cinder"
+          register: cinder_api_apache
+          ignore_errors: true
+          when: step|int == 2
+        - name: Stop and disable cinder_api service
+          service: name=httpd state=stopped enabled=no
+          when:
+            - step|int == 2
+            - cinder_api_apache.rc == 0
+        - name: remove old cinder cron jobs
+          when: step|int == 2
+          file:
+            path: /var/spool/cron/cinder
+            state: absent
+        - name: Set fact for removal of httpd package
+          when: step|int == 2
+          set_fact:
+            remove_httpd_package: {get_param: UpgradeRemoveUnusedPackages}
+        - name: Remove httpd package if operator requests it
+          yum: name=httpd state=removed
+          ignore_errors: True
+          when:
+            - step|int == 2
+            - remove_httpd_package|bool
       fast_forward_upgrade_tasks:
         - name: Check is cinder_api is deployed
           command: systemctl is-enabled --quiet openstack-cinder-api

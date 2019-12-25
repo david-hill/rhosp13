@@ -10,10 +10,10 @@ parameter_defaults:
   CinderDellEMCVNXSanLogin: 'admin'
   CinderDellEMCVNXSanPassword: ''
   CinderDellEMCVNXStorageProtocol: 'iscsi'
-  CinderDellEMCVNXStoragePoolNames: ''
+  CinderDellEMCVNXStoragePoolName: ''
   CinderDellEMCVNXDefaultTimeout: 3600
   CinderDellEMCVNXMaxLunsPerStorageGroup: 255
   CinderDellEMCVNXInitiatorAutoRegistration: 'true'
   CinderDellEMCVNXAuthType: 'global'
-  CinderDellEMCVNXStorageSecurityFileDir: ''
+  CinderDellEMCVNXStorageSecurityFileDir: '/etc/secfile/array1'
   CinderDellEMCVNXNaviSecCliPath: '/opt/Navisphere/bin/naviseccli'

@@ -234,42 +234,23 @@ outputs:
               /var/log/containers/mysql.
           ignore_errors: true
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if mysql service is deployed
+          command: systemctl is-enabled --quiet mariadb
           tags: common
-          block:
-            - name: Check if mysql service is deployed
-              command: systemctl is-enabled --quiet mariadb
-              ignore_errors: True
-              register: mariadb_enabled_result
-            - name: Set fact mariadb_enabled
-              set_fact:
-                mariadb_enabled: "{{ mariadb_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check if mysql service is running"
-              command: systemctl is-active --quiet mariadb
-              when: mariadb_enabled|bool
-              tags: validation
-        - when: step|int == 2
-          block:
-            - name: Stop and disable mysql service
-              when: mariadb_enabled|bool
-              service: name=mariadb state=stopped enabled=no
+          ignore_errors: True
+          register: mariadb_enabled
+        - name: "PreUpgrade step0,validation: Check if mysql service is running"
+          command: systemctl is-active --quiet mariadb
+          when:
+            - step|int == 0
+            - mariadb_enabled.rc == 0
+          tags: validation
+        - name: Stop and disable mysql service
+          when:
+            - step|int == 2
+            - mariadb_enabled.rc == 0
+          service: name=mariadb state=stopped enabled=no
       post_upgrade_tasks:
         - name: Check and upgrade Mysql database after major version upgrade
           command: docker exec -u root mysql mysql_upgrade
           when: step|int == 2
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 6
-            - release == 'ocata'
-            - is_bootstrap_node|bool
-          block:
-            - name: Create cell0 db
-              mysql_db:
-                name: nova_cell0
-                state: present
-            - name: Grant access to cell0 db
-              mysql_user:
-                name: nova
-                host_all: yes
-                state: present
-                priv: '*.*:ALL'

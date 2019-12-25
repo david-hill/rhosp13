@@ -53,7 +53,6 @@ parameters:
       - memory
       - processes
       - tcpconns
-      - unixsock
     type: comma_delimited_list
     description: >
       List of collectd plugins to activate on all overcloud hosts.  See
@@ -112,7 +111,7 @@ parameters:
     type: string
     description: >
       Type of authentication Gnocchi server is using. Supported values are
-      'basic' and 'keystone'.
+      'simple' and 'keystone'.
     default: 'keystone'
   CollectdGnocchiProtocol:
     type: string
@@ -208,8 +207,8 @@ conditions:
   collectd_connection:
     not:
       equals: [{get_param: CollectdServer}, '']
-  gnocchi_auth_basic:
-    equals: [{get_param: CollectdGnocchiAuthMode}, 'basic']
+  gnocchi_auth_simple:
+    equals: [{get_param: CollectdGnocchiAuthMode}, 'simple']
 
 outputs:
   role_data:
@@ -223,8 +222,6 @@ outputs:
             collectd::recurse: true
             collectd::purge_config: true
             collectd::minimum_version: "5.7"
-            collectd::plugin::unixsock::socketgroup: root
-            collectd::plugin::unixsock::socketfile: /var/run/collectd-socket
             collectd::interval: {get_param: CollectdDefaultPollingInterval}
             tripleo.collectd.plugins.collectd:
               yaql:
@@ -268,7 +265,7 @@ outputs:
                   tripleo::profile::base::metrics::collectd::gnocchi_keystone_region_name:
                     get_param: KeystoneRegion
                 - if:
-                  - gnocchi_auth_basic # use basic auth or keystone auth?
+                  - gnocchi_auth_simple # use simple auth or keystone auth?
                   - tripleo::profile::base::metrics::collectd::gnocchi_protocol:
                       get_param: CollectdGnocchiProtocol
                     tripleo::profile::base::metrics::collectd::gnocchi_server:

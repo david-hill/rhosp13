@@ -71,17 +71,6 @@ parameters:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
-  PcmkConfigRestartTimeout:
-    default: 600
-    description: Time in seconds to wait for a pcmk resource to restart when
-                 a config change is detected and the resource is being restarted
-    type: number
-  DeployIdentifier:
-    default: ''
-    type: string
-    description: >
-      Setting this to a unique value will re-run any deployment tasks which
-      perform configuration on a Heat stack-update.
 
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
@@ -219,28 +208,6 @@ outputs:
               - /var/run/docker.sock:/var/run/docker.sock:rw
             image: {get_param: DockerHAProxyImage}
         step_2:
-          haproxy_restart_bundle:
-            start_order: 2
-            detach: false
-            net: host
-            user: root
-            config_volume: haproxy
-            command:
-              - '/usr/bin/bootstrap_host_exec'
-              - 'haproxy'
-              - str_replace:
-                  template:
-                    'if /usr/sbin/pcs resource show haproxy-bundle; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT haproxy-bundle; echo "haproxy-bundle restart invoked"; fi'
-                  params:
-                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
-            image: {get_param: DockerHAProxyImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - /dev/shm:/dev/shm:rw
-                  - /var/lib/config-data/puppet-generated/haproxy/:/var/lib/kolla/config_files/src:ro
           haproxy_init_bundle:
             start_order: 3
             detach: false
@@ -271,13 +238,6 @@ outputs:
                   - /usr/libexec/initscripts/legacy-actions:/usr/libexec/initscripts/legacy-actions:ro
                   - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
                   - /dev/shm:/dev/shm:rw
-            environment:
-              # NOTE: this should force this container to re-run on each
-              # update (scale-out, etc.)
-              - list_join:
-                  - ''
-                  - - 'TRIPLEO_DEPLOY_IDENTIFIER='
-                    - {get_param: DeployIdentifier}
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -369,33 +329,11 @@ outputs:
             # Got to check that pacemaker_is_active is working fine with bundle.
             # TODO: pacemaker_is_active resource doesn't support bundle.
       upgrade_tasks:
-        - when: step|int == 0
-          tags: common
-          block:
-            - name: Get docker haproxy image
-              set_fact:
-                haproxy_docker_image_latest: *haproxy_image_pcmklatest
-            - name: Set HAProxy upgrade facts
-              block: *haproxy_update_upgrade_facts
-            - name: Prepare the switch to new haproxy container image name in pacemaker
-              when: haproxy_containerized|bool
-              block:
-                - name: Get haproxy image id currently used by pacemaker
-                  shell: "docker images | awk '/haproxy.* pcmklatest/{print $3}' | uniq"
-                  register: haproxy_current_pcmklatest_id
-                - name: Temporarily tag the current haproxy image id with the upgraded image name
-                  shell: "docker tag {{haproxy_current_pcmklatest_id.stdout}} {{haproxy_docker_image_latest}}"
-                  when: haproxy_current_pcmklatest_id.stdout != ''
-            - name: Check haproxy-bundle cluster resource status
-              pacemaker_resource:
-                resource: haproxy-bundle
-                state: show
-                check_mode: false
-              ignore_errors: true
-              register: haproxy_pcs_res_result
-            - name: Set fact haproxy_pcs_res
-              set_fact:
-                haproxy_pcs_res: "{{haproxy_pcs_res_result|succeeded}}"
+        - name: Get docker haproxy image
+          set_fact:
+            haproxy_docker_image_latest: *haproxy_image_pcmklatest
+        - name: Set HAProxy upgrade facts
+          block: *haproxy_update_upgrade_facts
         - name: haproxy baremetal to container upgrade tasks
           when:
             - step|int == 1
@@ -426,12 +364,29 @@ outputs:
                   register: output
                   retries: 5
                   until: output.rc == 0
+        - name: Prepare the switch to new haproxy container image name in pacemaker
+          when:
+            - step|int == 0
+            - haproxy_containerized|bool
+          block:
+            - name: Get haproxy image id currently used by pacemaker
+              shell: "docker images | awk '/haproxy.* pcmklatest/{print $3}' | uniq"
+              register: haproxy_current_pcmklatest_id
+            - name: Temporarily tag the current haproxy image id with the upgraded image name
+              shell: "docker tag {{haproxy_current_pcmklatest_id.stdout}} {{haproxy_docker_image_latest}}"
+        - name: Check haproxy-bundle cluster resource status
+          pacemaker_resource:
+            resource: haproxy-bundle
+            state: show
+            check_mode: false
+          ignore_errors: true
+          register: haproxy_pcs_res
         - name: Update haproxy pcs resource bundle for new container image
           when:
             - step|int == 1
             - haproxy_containerized|bool
             - is_bootstrap_node
-            - haproxy_pcs_res|bool
+            - haproxy_pcs_res|succeeded
           block:
             - name: Disable the haproxy cluster resource before container upgrade
               pacemaker_resource:

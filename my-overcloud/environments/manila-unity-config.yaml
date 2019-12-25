@@ -15,5 +15,3 @@ parameter_defaults:
   ManilaUnityServerMetaPool: ''
   ManilaUnityShareDataPools: ''
   ManilaUnityEthernetPorts: ''
-  ManilaUnityEmcSslCertVerify: false
-  ManilaUnityEmcSslCertPath: ''

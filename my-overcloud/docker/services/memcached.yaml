@@ -57,10 +57,7 @@ outputs:
     description: Role data for the Memcached API role.
     value:
       service_name: {get_attr: [MemcachedBase, role_data, service_name]}
-      config_settings:
-        map_merge:
-          - {get_attr: [MemcachedBase, role_data, config_settings]}
-          - memcached::logstdout: true
+      config_settings: {get_attr: [MemcachedBase, role_data, config_settings]}
       logging_source: {get_attr: [MemcachedBase, role_data, logging_source]}
       logging_groups: {get_attr: [MemcachedBase, role_data, logging_groups]}
       service_config_settings: {get_attr: [MemcachedBase, role_data, service_config_settings]}
@@ -80,8 +77,6 @@ outputs:
             net: host
             privileged: false
             restart: always
-            healthcheck:
-              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -96,25 +91,22 @@ outputs:
               Memcached container logs to stdout/stderr only.
           ignore_errors: true
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if memcached is deployed
+          command: systemctl is-enabled --quiet memcached
           tags: common
-          block:
-            - name: Check if memcached is deployed
-              command: systemctl is-enabled --quiet memcached
-              ignore_errors: True
-              register: memcached_enabled_result
-            - name: Set fact memcached_enabled
-              set_fact:
-                memcached_enabled: "{{ memcached_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service memcached is running"
-              command: systemctl is-active --quiet memcached
-              when: memcached_enabled|bool
-              tags: validation
-        - when: step|int == 2
-          block:
-            - name: Stop and disable memcached service
-              when: memcached_enabled|bool
-              service: name=memcached state=stopped enabled=no
+          ignore_errors: True
+          register: memcached_enabled
+        - name: "PreUpgrade step0,validation: Check service memcached is running"
+          command: systemctl is-active --quiet memcached
+          when:
+            - step|int == 0
+            - memcached_enabled.rc == 0
+          tags: validation
+        - name: Stop and disable memcached service
+          when:
+            - step|int == 2
+            - memcached_enabled.rc == 0
+          service: name=memcached state=stopped enabled=no
       fast_forward_upgrade_tasks:
         - name: Check if memcached is deployed
           command: systemctl is-enabled --quiet memcached

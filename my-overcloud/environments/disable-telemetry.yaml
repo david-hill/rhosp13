@@ -18,4 +18,3 @@ resource_registry:
 
 parameter_defaults:
   NotificationDriver: 'noop'
-  GnocchiRbdPoolName: ''

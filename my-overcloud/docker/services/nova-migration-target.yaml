@@ -140,8 +140,6 @@ outputs:
             privileged: true
             user: root
             restart: always
-            healthcheck:
-              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}

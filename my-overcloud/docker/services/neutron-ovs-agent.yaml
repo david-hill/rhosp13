@@ -110,7 +110,7 @@ outputs:
             #!/bin/bash
             set -xe
             /usr/bin/python -m neutron.cmd.destroy_patch_ports --config-file /usr/share/neutron/neutron-dist.conf --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugins/ml2/openvswitch_agent.ini --config-dir /etc/neutron/conf.d/common --config-dir /etc/neutron/conf.d/neutron-openvswitch-agent
-            /usr/bin/neutron-openvswitch-agent --config-file /usr/share/neutron/neutron-dist.conf --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugins/ml2/openvswitch_agent.ini --config-dir /etc/neutron/conf.d/common --log-file=/var/log/neutron/openvswitch-agent.log
+            /usr/bin/neutron-openvswitch-agent --config-file /usr/share/neutron/neutron-dist.conf --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugins/ml2/openvswitch_agent.ini --config-file /etc/neutron/plugins/ml2/ml2_conf.ini --config-dir /etc/neutron/conf.d/common --log-file=/var/log/neutron/openvswitch-agent.log
       docker_config:
         step_3:
           neutron_ovs_bridge:
@@ -168,59 +168,37 @@ outputs:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       metadata_settings:
         get_attr: [NeutronOvsAgentBase, role_data, metadata_settings]
-      host_prep_tasks:
-        list_concat:
-          - {get_attr: [NeutronLogging, host_prep_tasks]}
-          -
-            - block:
-              - name: Copy in cleanup script
-                copy:
-                  content: {get_file: ./neutron/neutron-cleanup}
-                  dest: '/usr/libexec/neutron-cleanup'
-                  force: yes
-                  mode: '0755'
-              - name: Copy in cleanup service
-                copy:
-                  content: {get_file: ./neutron/neutron-cleanup.service}
-                  dest: '/usr/lib/systemd/system/neutron-cleanup.service'
-                  force: yes
-              - name: Enabling the cleanup service
-                service:
-                  name: neutron-cleanup
-                  enabled: yes
-
+      host_prep_tasks: {get_attr: [NeutronLogging, host_prep_tasks]}
       upgrade_tasks:
         list_concat:
           - get_attr: [NeutronOvsAgentBase, role_data, ovs_upgrade_tasks]
           -
-            - when: step|int == 0
+            - name: Check if neutron_ovs_agent is deployed
+              command: systemctl is-enabled --quiet neutron-openvswitch-agent
               tags: common
-              block:
-                - name: Check if neutron_ovs_agent is deployed
-                  command: systemctl is-enabled --quiet neutron-openvswitch-agent
-                  ignore_errors: True
-                  register: neutron_ovs_agent_enabled_result
-                - name: Set fact neutron_ovs_agent_enabled
-                  set_fact:
-                    neutron_ovs_agent_enabled: "{{ neutron_ovs_agent_enabled_result.rc == 0 }}"
-                - name: "PreUpgrade step0,validation: Check service neutron-openvswitch-agent is running"
-                  command: systemctl is-active --quiet neutron-openvswitch-agent
-                  when: neutron_ovs_agent_enabled|bool
-                  tags: validation
-            - when: step|int == 2
-              block:
-                - name: Stop and disable neutron_ovs_agent service
-                  when: neutron_ovs_agent_enabled|bool
-                  service: name=neutron-openvswitch-agent state=stopped enabled=no
-            - when: step|int == 3
-              block:
-                - name: Set fact for removal of openstack-neutron-openvswitch package
-                  set_fact:
-                    remove_neutron_openvswitch_package: {get_param: UpgradeRemoveUnusedPackages}
-                - name: Remove openstack-neutron-openvswitch package if operator requests it
-                  yum: name=openstack-neutron-openvswitch state=removed
-                  ignore_errors: True
-                  when: remove_neutron_openvswitch_package|bool
+              ignore_errors: True
+              register: neutron_ovs_agent_enabled
+            - name: "PreUpgrade step0,validation: Check service neutron-openvswitch-agent is running"
+              command: systemctl is-active --quiet neutron-openvswitch-agent
+              when:
+                - step|int == 0
+                - neutron_ovs_agent_enabled.rc == 0
+              tags: validation
+            - name: Stop and disable neutron_ovs_agent service
+              when:
+                - step|int == 2
+                - neutron_ovs_agent_enabled.rc == 0
+              service: name=neutron-openvswitch-agent state=stopped enabled=no
+            - name: Set fact for removal of openstack-neutron-openvswitch package
+              when: step|int == 2
+              set_fact:
+                remove_neutron_openvswitch_package: {get_param: UpgradeRemoveUnusedPackages}
+            - name: Remove openstack-neutron-openvswitch package if operator requests it
+              yum: name=openstack-neutron-openvswitch state=removed
+              ignore_errors: True
+              when:
+                - step|int == 2
+                - remove_neutron_openvswitch_package|bool
       update_tasks:
         # puppetlabs-firewall manages security rules via Puppet but make the rules
         # consistent by default. Since Neutron also creates some rules, we don't

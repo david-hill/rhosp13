@@ -84,10 +84,6 @@ outputs:
               dest: "/"
               merge: true
               preserve_properties: true
-            - source: "/var/lib/kolla/config_files/src/etc/collectd.d"
-              dest: "/etc/"
-              merge: false
-              preserve_properties: true
           permissions:
             - path: /var/log/collectd
               owner: collectd:collectd
@@ -101,8 +97,6 @@ outputs:
             privileged: true
             user: root
             restart: always
-            healthcheck:
-              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -112,7 +106,6 @@ outputs:
                   - /var/log/containers/collectd:/var/log/collectd:rw
                   - /var/run/openvswitch:/var/run/openvswitch:ro
                   - /var/run/ceph:/var/run/ceph:ro
-                  - /var/run/libvirt:/var/run/libvirt:ro
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
@@ -128,34 +121,32 @@ outputs:
               /var/log/containers/collectd.
           ignore_errors: true
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if collectd is deployed
+          command: systemctl is-enabled --quiet collectd
           tags: common
-          block:
-            - name: Check if collectd is deployed
-              command: systemctl is-enabled --quiet collectd
-              ignore_errors: True
-              register: collectd_enabled_result
-            - name: Set fact collectd_enabled
-              set_fact:
-                collectd_enabled: "{{ collectd_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service collectd service is running"
-              command: systemctl is-active --quiet collectd
-              when: collectd_enabled|bool
-              tags: validation
-        - when: step|int == 2
-          block:
-            - name: Stop and disable collectd service
-              when: collectd_enabled|bool
-              service: name=collectd.service state=stopped enabled=no
-        - when: step|int == 3
-          block:
-            - name: Set fact for removal of collectd package
-              set_fact:
-                remove_collectd_package: {get_param: UpgradeRemoveUnusedPackages}
-            - name: Remove collectd package if operator requests it
-              yum: name=collectd state=removed
-              ignore_errors: True
-              when: remove_collectd_package|bool
+          ignore_errors: True
+          register: collectd_enabled
+        - name: "PreUpgrade step0,validation: Check service collectd service is running"
+          command: systemctl is-active --quiet collectd
+          when:
+            - step|int == 0
+            - collectd_enabled.rc == 0
+          tags: validation
+        - name: Stop and disable collectd service
+          when:
+            - step|int == 2
+            - collectd_enabled.rc == 0
+          service: name=collectd.service state=stopped enabled=no
+        - name: Set fact for removal of collectd package
+          when: step|int == 2
+          set_fact:
+            remove_collectd_package: {get_param: UpgradeRemoveUnusedPackages}
+        - name: Remove collectd package if operator requests it
+          yum: name=collectd state=removed
+          ignore_errors: True
+          when:
+            - step|int == 2
+            - remove_collectd_package|bool
       fast_forward_upgrade_tasks:
         - name: Check if collectd.service is deployed
           command: systemctl is-enabled --quiet collectd.service

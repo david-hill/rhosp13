@@ -88,16 +88,6 @@ resources:
   MySQLClient:
     type: ../../puppet/services/database/mysql-client.yaml
 
-  NovaComputeCommon:
-    type: ./nova-compute-common.yaml
-    properties:
-      EndpointMap: {get_param: EndpointMap}
-      ServiceData: {get_param: ServiceData}
-      ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
-      RoleName: {get_param: RoleName}
-      RoleParameters: {get_param: RoleParameters}
-
   NovaComputeBase:
     type: ../../puppet/services/nova-compute.yaml
     properties:
@@ -129,7 +119,6 @@ outputs:
           - get_attr: [NovaLogging, config_settings]
       logging_source: {get_attr: [NovaComputeBase, role_data, logging_source]}
       logging_groups: {get_attr: [NovaComputeBase, role_data, logging_groups]}
-      service_config_settings: {get_attr: [NovaComputeBase, role_data, service_config_settings]}
       puppet_config:
         config_volume: nova_libvirt
         puppet_tags: nova_config,nova_paste_api_ini
@@ -166,6 +155,9 @@ outputs:
             - path: /var/log/nova
               owner: nova:nova
               recurse: true
+            - path: /var/lib/nova
+              owner: nova:nova
+              recurse: true
             - path:
                 str_replace:
                   template: /etc/ceph/CLUSTER.client.USER.keyring
@@ -174,21 +166,10 @@ outputs:
                     USER: {get_param: CephClientUserName}
               owner: nova:nova
               perm: '0600'
-      docker_config_scripts: {get_attr: [NovaComputeCommon, docker_config_scripts]}
       docker_config:
-        step_3:
-          nova_statedir_owner:
-            image: &nova_compute_image {get_param: DockerNovaComputeImage}
-            user: root
-            privileged: false
-            detach: false
-            volumes:
-              - /var/lib/nova:/var/lib/nova:shared
-              - /var/lib/docker-config-scripts/:/docker-config-scripts/
-            command: "/docker-config-scripts/nova_statedir_ownership.py"
         step_4:
           nova_compute:
-            image: *nova_compute_image
+            image: &nova_compute_image {get_param: DockerNovaComputeImage}
             ulimit: {get_param: DockerNovaComputeUlimit}
             ipc: host
             net: host
@@ -222,14 +203,12 @@ outputs:
       host_prep_tasks:
         list_concat:
         - {get_attr: [NovaLogging, host_prep_tasks]}
-        - {get_attr: [NovaComputeBase, role_data, host_prep_tasks]}
         - - name: create persistent directories
             file:
               path: "{{ item }}"
               state: directory
             with_items:
               - /var/lib/nova
-              - /var/lib/nova/instances
               - /var/lib/libvirt
           - name: ensure ceph configurations exist
             file:
@@ -257,40 +236,39 @@ outputs:
               file: path=/var/lib/nova/instanceha/enabled state=touch
               when: iha_nodes.stdout|lower | search('"'+ansible_hostname|lower+'"')
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if nova_compute is deployed
+          command: systemctl is-enabled --quiet openstack-nova-compute
           tags: common
-          block:
-            - name: Check if nova_compute is deployed
-              command: systemctl is-enabled --quiet openstack-nova-compute
-              ignore_errors: True
-              register: nova_compute_enabled_result
-            - name: Set fact nova_compute_enabled
-              set_fact:
-                nova_compute_enabled: "{{ nova_compute_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-nova-compute is running"
-              command: systemctl is-active --quiet openstack-nova-compute
-              tags: validation
-              when: nova_compute_enabled|bool
-        - when: step|int == 1
-          block:
-            - name: Set compute upgrade level to auto
-              ini_file:
-                str_replace:
-                  template: "dest=/etc/nova/nova.conf section=upgrade_levels option=compute value=LEVEL"
-                  params:
-                    LEVEL: {get_param: UpgradeLevelNovaCompute}
-        - when: step|int == 2
-          block:
-            - name: Stop and disable nova-compute service
-              when: nova_compute_enabled|bool
-              service: name=openstack-nova-compute state=stopped enabled=no
-            - name: Set fact for removal of openstack-nova-compute package
-              set_fact:
-                remove_nova_compute_package: {get_param: UpgradeRemoveUnusedPackages}
-            - name: Remove openstack-nova-compute package if operator requests it
-              yum: name=openstack-nova-compute state=removed
-              ignore_errors: True
-              when: remove_nova_compute_package|bool
+          ignore_errors: True
+          register: nova_compute_enabled
+        - name: Set compute upgrade level to auto
+          when: step|int == 1
+          ini_file:
+            str_replace:
+              template: "dest=/etc/nova/nova.conf section=upgrade_levels option=compute value=LEVEL"
+              params:
+                LEVEL: {get_param: UpgradeLevelNovaCompute}
+        - name: "PreUpgrade step0,validation: Check service openstack-nova-compute is running"
+          command: systemctl is-active --quiet openstack-nova-compute
+          tags: validation
+          when:
+            - step|int == 0
+            - nova_compute_enabled.rc == 0
+        - name: Stop and disable nova-compute service
+          when:
+            - step|int == 2
+            - nova_compute_enabled.rc == 0
+          service: name=openstack-nova-compute state=stopped enabled=no
+        - name: Set fact for removal of openstack-nova-compute package
+          when: step|int == 2
+          set_fact:
+            remove_nova_compute_package: {get_param: UpgradeRemoveUnusedPackages}
+        - name: Remove openstack-nova-compute package if operator requests it
+          yum: name=openstack-nova-compute state=removed
+          ignore_errors: True
+          when:
+            - step|int == 2
+            - remove_nova_compute_package|bool
       fast_forward_upgrade_tasks:
         - name: Check if nova-compute is deployed
           command:  systemctl is-enabled --quiet openstack-nova-compute
@@ -311,9 +289,3 @@ outputs:
             - step|int == 1
             - nova_compute_enabled|bool
             - release == 'ocata'
-        - name: Set upgrade marker in nova statedir
-          when:
-            - step|int == 1
-            - nova_compute_enabled|bool
-            - release == 'ocata'
-          file: path=/var/lib/nova/upgrade_marker state=touch owner=nova group=nova

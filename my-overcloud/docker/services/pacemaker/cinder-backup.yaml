@@ -15,7 +15,7 @@ parameters:
     description: The short name of the Cinder Backup backend to use.
     type: string
     constraints:
-    - allowed_values: ['swift', 'ceph', 'nfs']
+    - allowed_values: ['swift', 'ceph']
   CinderBackupRbdPoolName:
     default: backups
     type: string
@@ -52,17 +52,6 @@ parameters:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
-  PcmkConfigRestartTimeout:
-    default: 600
-    description: Time in seconds to wait for a pcmk resource to restart when
-                 a config change is detected and the resource is being restarted
-    type: number
-  DeployIdentifier:
-    default: ''
-    type: string
-    description: >
-      Setting this to a unique value will re-run any deployment tasks which
-      perform configuration on a Heat stack-update.
 
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
@@ -181,28 +170,6 @@ outputs:
               - /var/log/containers/cinder:/var/log/cinder
             command: ['/bin/bash', '-c', 'chown -R cinder:cinder /var/log/cinder']
         step_5:
-          cinder_backup_restart_bundle:
-            start_order: 0
-            config_volume: cinder
-            detach: false
-            net: host
-            user: root
-            command:
-              - '/usr/bin/bootstrap_host_exec'
-              - 'cinder_backup'
-              - str_replace:
-                  template:
-                    'if /usr/sbin/pcs resource show openstack-cinder-backup; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT openstack-cinder-backup; echo "openstack-cinder-backup restart invoked"; fi'
-                  params:
-                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
-            image: {get_param: DockerCinderBackupImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - /dev/shm:/dev/shm:rw
-                  - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
           cinder_backup_init_bundle:
             start_order: 1
             detach: false
@@ -224,13 +191,6 @@ outputs:
                 - {get_attr: [ContainersCommon, docker_puppet_apply_volumes]}
                 - - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
                   - /dev/shm:/dev/shm:rw
-            environment:
-              # NOTE: this should force this container to re-run on each
-              # update (scale-out, etc.)
-              - list_join:
-                  - ''
-                  - - 'TRIPLEO_DEPLOY_IDENTIFIER='
-                    - {get_param: DeployIdentifier}
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -280,39 +240,17 @@ outputs:
             # Got to check that pacemaker_is_active is working fine with bundle.
             # TODO: pacemaker_is_active resource doesn't support bundle.
       upgrade_tasks:
-        - when: step|int == 0
-          tags: common
-          block:
-            - name: Get docker Cinder-Backup image
-              set_fact:
-                cinder_backup_docker_image_latest: *cinder_backup_image_pcmklatest
-            - name: Check for Cinder-Backup Kolla configuration
-              command: grep '^backup_driver[ \t]*=' /var/lib/config-data/puppet-generated/cinder/etc/cinder/cinder.conf
-              changed_when: no
-              ignore_errors: true
-              register: cinder_backup_kolla_config
-            - name: Check if Cinder-Backup is already containerized
-              set_fact:
-                cinder_backup_containerized: "{{cinder_backup_kolla_config|succeeded}}"
-            - name: Prepare the switch to new cinder_backup container image name in pacemaker
-              when: cinder_backup_containerized|bool
-              block:
-                - name: Get cinder_backup image id currently used by pacemaker
-                  shell: "docker images | awk '/cinder-backup.* pcmklatest/{print $3}' | uniq"
-                  register: cinder_backup_current_pcmklatest_id
-                - name: Temporarily tag the current cinder_backup image id with the upgraded image name
-                  shell: "docker tag {{cinder_backup_current_pcmklatest_id.stdout}} {{cinder_backup_docker_image_latest}}"
-                  when: cinder_backup_current_pcmklatest_id.stdout != ''
-            - name: Check openstack-cinder-backup cluster resource status
-              pacemaker_resource:
-                resource: openstack-cinder-backup
-                state: show
-                check_mode: false
-              ignore_errors: true
-              register: cinder_backup_pcs_res_result
-            - name: Set fact cinder_backup_pcs_res
-              set_fact:
-                cinder_backup_pcs_res: "{{cinder_backup_pcs_res_result|succeeded}}"
+        - name: Get docker Cinder-Backup image
+          set_fact:
+            cinder_backup_docker_image_latest: *cinder_backup_image_pcmklatest
+        - name: Check for Cinder-Backup Kolla configuration
+          command: grep '^backup_driver[ \t]*=' /var/lib/config-data/puppet-generated/cinder/etc/cinder/cinder.conf
+          changed_when: no
+          ignore_errors: true
+          register: cinder_backup_kolla_config
+        - name: Check if Cinder-Backup is already containerized
+          set_fact:
+            cinder_backup_containerized: "{{cinder_backup_kolla_config|succeeded}}"
         - name: Cinder-Backup baremetal to container upgrade tasks
           when:
             - step|int == 1
@@ -352,12 +290,29 @@ outputs:
                   until: output.rc == 0
             - name: Disable cinder_backup service
               service: name=openstack-cinder-backup enabled=no
+        - name: Prepare the switch to new cinder_backup container image name in pacemaker
+          when:
+            - step|int == 0
+            - cinder_backup_containerized|bool
+          block:
+            - name: Get cinder_backup image id currently used by pacemaker
+              shell: "docker images | awk '/cinder-backup.* pcmklatest/{print $3}' | uniq"
+              register: cinder_backup_current_pcmklatest_id
+            - name: Temporarily tag the current cinder_backup image id with the upgraded image name
+              shell: "docker tag {{cinder_backup_current_pcmklatest_id.stdout}} {{cinder_backup_docker_image_latest}}"
+        - name: Check openstack-cinder-backup cluster resource status
+          pacemaker_resource:
+            resource: openstack-cinder-backup
+            state: show
+            check_mode: false
+          ignore_errors: true
+          register: cinder_backup_pcs_res
         - name: Update cinder_backup pcs resource bundle for new container image
           when:
             - step|int == 1
             - cinder_backup_containerized|bool
             - is_bootstrap_node
-            - cinder_backup_pcs_res|bool
+            - cinder_backup_pcs_res|succeeded
           block:
             - name: Disable the cinder_backup cluster resource before container upgrade
               pacemaker_resource:

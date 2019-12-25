@@ -127,7 +127,7 @@ outputs:
             net: host
             detach: true
             user: odl
-            restart: unless-stopped
+            restart: always
             healthcheck:
               test: /openstack/healthcheck
             volumes:
@@ -139,7 +139,6 @@ outputs:
                   - /var/lib/opendaylight/journal:/opt/opendaylight/journal
                   - /var/lib/opendaylight/snapshots:/opt/opendaylight/snapshots
                   - /var/lib/opendaylight/data:/opt/opendaylight/data
-                  - /var/log/containers/opendaylight:/opt/opendaylight/data/log
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       metadata_settings:
@@ -157,46 +156,32 @@ outputs:
             - /var/lib/opendaylight/snapshots
             - /var/lib/opendaylight/journal
             - /var/lib/opendaylight/data
-            - /var/log/opendaylight
-            - /var/log/containers/opendaylight
         - name: opendaylight logs readme
           copy:
             dest: /var/log/opendaylight/readme.txt
             content: |
-              Logs from opendaylight container can be found by running "sudo docker logs opendaylight_api" and are also available in /var/log/containers/opendaylight/karaf.log
+              Logs from opendaylight container can be found by running "sudo docker logs opendaylight_api"
           ignore_errors: true
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if opendaylight is deployed
+          command: systemctl is-enabled --quiet opendaylight
           tags: common
-          block:
-            - name: Check if opendaylight is deployed
-              command: systemctl is-enabled --quiet opendaylight
-              ignore_errors: True
-              register: opendaylight_enabled_result
-            - name: Set fact opendaylight_enabled
-              set_fact:
-                opendaylight_enabled: "{{ opendaylight_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service opendaylight is running"
-              command: systemctl is-active --quiet opendaylight
-              when: opendaylight_enabled|bool
-              tags: validation
-        - when: step|int == 2
-          block:
-            - name: Stop and disable opendaylight_api service
-              when: opendaylight_enabled|bool
-              service: name=opendaylight state=stopped enabled=no
+          ignore_errors: True
+          register: opendaylight_enabled
+        - name: "PreUpgrade step0,validation: Check service opendaylight is running"
+          command: systemctl is-active --quiet opendaylight
+          when:
+            - step|int == 0
+            - opendaylight_enabled.rc == 0
+          tags: validation
+        - name: Stop and disable opendaylight_api service
+          when:
+            - step|int == 2
+            - opendaylight_enabled.rc == 0
+          service: name=opendaylight state=stopped enabled=no
         # Containerized deployment upgrade steps
         - name: ODL container L2 update and upgrade tasks
           block: &odl_container_upgrade_tasks
-            - name: Check if ODL container is present
-              shell: "docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep '^opendaylight_api$'"
-              register: opendaylight_api_container_present
-              failed_when: false
-            # NOTE: using shell module because of
-            # https://github.com/ansible/ansible/issues/27960
-            - name: Update ODL container restart policy to unless-stopped
-              shell: "docker update --restart=unless-stopped opendaylight_api"
-              when: opendaylight_api_container_present.rc == 0
             - name: stop previous ODL container
               docker_container:
                 name: opendaylight_api
@@ -223,6 +208,18 @@ outputs:
                 mode: 0644
               when: step|int == 1
       post_upgrade_tasks: &odl_container_post_upgrade_tasks
+        - name: Disable Upgrade Flag via Rest
+          shell:
+            str_replace:
+              template: 'curl -k -v --silent --fail -u ODL_USERNAME:$ODL_PASSWORD -X \
+                         PUT -d "{ "config": { "upgradeInProgress": false } }" \
+                         -H "Content-Type: application/json" \
+                         $ODL_URI/restconf/config/genius-mdsalutil:config'
+              params:
+                $ODL_USERNAME: {get_attr: [OpenDaylightBase, role_data, config_settings, 'opendaylight::username']}
+                $ODL_PASSWORD: {get_attr: [OpenDaylightBase, role_data, config_settings, 'opendaylight::password']}
+                $ODL_URI: {get_param: [EndpointMap, OpenDaylightInternal, uri]}
+          when: step|int == 0
         - name: Disable Upgrade in Config File
           copy:
             dest: /var/lib/config-data/puppet-generated/opendaylight/opt/opendaylight/etc/opendaylight/datastore/initial/config/genius-mdsalutil-config.xml
@@ -234,24 +231,6 @@ outputs:
             group: 42462
             mode: 0644
           when: step|int == 0
-          # 2 commands in 1 task because the sequence of commands needs to be ensured
-          # and that no other task is executed in between.
-        - name: Delete Upgrade Flag and Unset it via Rest
-          shell:
-            str_replace:
-              template: >
-                curl -k -v --silent --fail -u $ODL_USERNAME:$ODL_PASSWORD
-                -H "Content-Type: application/json" -X DELETE
-                $ODL_URI/restconf/config/genius-mdsalutil:config;
-                curl -k -v --silent --fail -u $ODL_USERNAME:$ODL_PASSWORD
-                -H "Content-Type: application/json" -X POST
-                $ODL_URI/restconf/config/genius-mdsalutil:config
-                -d "{ "upgradeInProgress": false }"
-              params:
-                $ODL_USERNAME: {get_attr: [OpenDaylightBase, role_data, config_settings, 'opendaylight::username']}
-                $ODL_PASSWORD: {get_attr: [OpenDaylightBase, role_data, config_settings, 'opendaylight::password']}
-                $ODL_URI: {get_param: [EndpointMap, OpenDaylightInternal, uri]}
-          when: step|int == 0
       update_tasks:
         - name: Get ODL update level
           block: &get_odl_update_level
@@ -260,15 +239,6 @@ outputs:
                 odl_update_level: {get_param: ODLUpdateLevel}
         - name: Stop ODL container and remove cache
           block:
-            - name: Check if ODL container is present
-              shell: "docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep '^opendaylight_api$'"
-              register: opendaylight_api_container_present
-              failed_when: false
-            # NOTE: using shell module because of
-            # https://github.com/ansible/ansible/issues/27960
-            - name: Update ODL container restart policy to unless-stopped
-              shell: "docker update --restart=unless-stopped opendaylight_api"
-              when: opendaylight_api_container_present.rc == 0
             - name: Stop previous ODL container
               docker_container:
                 name: opendaylight_api

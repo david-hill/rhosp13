@@ -8,7 +8,6 @@ resource_registry:
   # custom pacemaker services
   # NOTE: Please before adding any pacemaker-managed services, get in touch
   # with bandini, Ng or beekhof
-  # NOTE(bogdando): downstream-only change to keep it backwards compatible with OSP12
   OS::TripleO::Services::CinderVolume: ../docker/services/pacemaker/cinder-volume.yaml
   OS::TripleO::Services::RabbitMQ: ../docker/services/pacemaker/rabbitmq.yaml
   OS::TripleO::Services::HAproxy: ../docker/services/pacemaker/haproxy.yaml

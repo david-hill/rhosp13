@@ -284,15 +284,6 @@ conditions:
       equals:
         - {get_param: {{role.name}}NetworkDeploymentActions}
         - []
-  ctlplane_fixed_ip_set:
-    not:
-      equals:
-{%- if role.deprecated_param_ips %}
-        - {get_param: [{{role.deprecated_param_ips}}, 'ctlplane', {get_param: NodeIndex}]}
-{%- else %}
-        - {get_param: [{{role.name}}IPs, 'ctlplane', {get_param: NodeIndex}]}
-{%- endif %}
-        - ""
 
 resources:
   {{server_resource_name}}:
@@ -323,25 +314,14 @@ resources:
 {%- endif %}
       key_name: {get_param: KeyName}
       networks:
-        - if:
-          - ctlplane_fixed_ip_set
-          - network: ctlplane
-            subnet: {get_param: {{role.name}}ControlPlaneSubnet}
-{%- if role.deprecated_param_ips %}
-            fixed_ip: {get_param: [{{role.deprecated_param_ips}}, 'ctlplane', {get_param: NodeIndex}]}
-{%- else %}
-            fixed_ip: {get_param: [{{role.name}}IPs, 'ctlplane', {get_param: NodeIndex}]}
-{%- endif %}
-          - network: ctlplane
-            subnet: {get_param: {{role.name}}ControlPlaneSubnet}
+        - network: ctlplane
+          subnet: {get_param: {{role.name}}ControlPlaneSubnet}
       user_data_format: SOFTWARE_CONFIG
       user_data: {get_resource: UserData}
       name:
-        yaql:
-          expression: $.data.hostname_map.get($.data.hostname, $.data.hostname).toLower()
-          data:
-            hostname: {get_param: Hostname}
-            hostname_map: {get_param: HostnameMap}
+        str_replace:
+            template: {get_param: Hostname}
+            params: {get_param: HostnameMap}
       software_config_transport: {get_param: SoftwareConfigTransport}
       metadata:
         map_merge:
@@ -534,7 +514,6 @@ resources:
       config:
         hierarchy:
           - '"%{::uuid}"'
-          - docker_puppet # Optionally provided by docker-puppet.py
           - heat_config_%{::deploy_config_name}
           - config_step
           - {{role.name.lower()}}_extraconfig
@@ -661,27 +640,6 @@ resources:
         server: {get_resource: {{server_resource_name}}}
         deployment_actions: {get_attr: [DeploymentActions, value]}
 
-  SshKnownHostsHostnames:
-    type: OS::Heat::Value
-    properties:
-      value:
-        str_replace:
-          template: "PRIMARYIP,PRIMARYHOST.DOMAIN,PRIMARYHOST,\
-    {%- for network in networks %}
-  {{network.name}}IP,{{network.name}}HOST.DOMAIN,{{network.name}}HOST,\
-    {%- endfor %}
-  CTLPLANEIP,CTLPLANEHOST.DOMAIN,CTLPLANEHOST"
-          params:
-            PRIMARYIP: {get_attr: [NetIpMap, net_ip_map, {get_param: [ServiceNetMap, {{role.name}}HostnameResolveNetwork]}]}
-            DOMAIN: {get_param: CloudDomain}
-            PRIMARYHOST: {get_attr: [{{server_resource_name}}, name]}
-    {%- for network in networks %}
-            {{network.name}}IP: {get_attr: [{{network.name}}Port, ip_address]}
-            {{network.name}}HOST: {get_attr: [NetHostMap, value, {{network.name_lower|default(network.name.lower())}}, short]}
-    {%- endfor %}
-            CTLPLANEIP: {get_attr: [{{server_resource_name}}, networks, ctlplane, 0]}
-            CTLPLANEHOST: {get_attr: [NetHostMap, value, ctlplane, short]}
-
 outputs:
   ip_address:
     description: IP address of the server in the ctlplane network
@@ -733,17 +691,23 @@ outputs:
   known_hosts_entry:
     description: Entry for ssh known hosts
     value:
-      list_join:
-        - ' '
-        - - {get_attr: [SshKnownHostsHostnames, value]}
-          - {get_attr: [SshHostPubKey, ecdsa]}
-  known_hosts_hostnames:
-    description: Mapping of server name to hostnames portion of ssh known hosts entry
-    value:
-      map_replace:
-        - name: {get_attr: [SshKnownHostsHostnames, value]}
-        - keys:
-            name: {get_attr: [{{server_resource_name}}, name]}
+      str_replace:
+        template: "PRIMARYIP,PRIMARYHOST.DOMAIN,PRIMARYHOST,\
+  {%- for network in networks %}
+{{network.name}}IP,{{network.name}}HOST.DOMAIN,{{network.name}}HOST,\
+  {%- endfor %}
+CTLPLANEIP,CTLPLANEHOST.DOMAIN,CTLPLANEHOST HOSTSSHPUBKEY"
+        params:
+          PRIMARYIP: {get_attr: [NetIpMap, net_ip_map, {get_param: [ServiceNetMap, {{role.name}}HostnameResolveNetwork]}]}
+          DOMAIN: {get_param: CloudDomain}
+          PRIMARYHOST: {get_attr: [{{server_resource_name}}, name]}
+  {%- for network in networks %}
+          {{network.name}}IP: {get_attr: [{{network.name}}Port, ip_address]}
+          {{network.name}}HOST: {get_attr: [NetHostMap, value, {{network.name_lower|default(network.name.lower())}}, short]}
+  {%- endfor %}
+          CTLPLANEIP: {get_attr: [{{server_resource_name}}, networks, ctlplane, 0]}
+          CTLPLANEHOST: {get_attr: [NetHostMap, value, ctlplane, short]}
+          HOSTSSHPUBKEY: {get_attr: [SshHostPubKey, ecdsa]}
   nova_server_resource:
     description: Heat resource handle for {{role.name}} server
     value:

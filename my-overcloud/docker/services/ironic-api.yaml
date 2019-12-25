@@ -36,14 +36,6 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
-  EnableOnlineDataMigrations:
-    type: boolean
-    description: Enable post-upgrade online data migrations.
-    default: true
-
-conditions:
-
-  online_data_migrations_enabled: {equals: [{get_param: EnableOnlineDataMigrations}, true]}
 
 resources:
 
@@ -62,16 +54,6 @@ resources:
       DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
-
-  OnlineDataMigrationsCommand:
-    type: OS::Heat::Value
-    properties:
-      type: string
-      value:
-        if:
-          - online_data_migrations_enabled
-          - "/usr/bin/bootstrap_host_exec ironic_api su ironic -s /bin/bash -c 'ironic-dbsync --config-file /etc/ironic/ironic.conf online_data_migrations'"
-          - "/usr/bin/echo Online data migrations disabled via EnableOnlineDataMigrations parameter"
 
 outputs:
   role_data:
@@ -153,22 +135,6 @@ outputs:
                   - /var/log/containers/httpd/ironic-api:/var/log/httpd
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
-        step_5:
-          ironic_online_migrations:
-            start_order: 2
-            image: *ironic_api_image
-            net: host
-            privileged: false
-            detach: false
-            user: root
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/config-data/ironic_api/etc/ironic:/etc/ironic:ro
-                  - /var/log/containers/ironic:/var/log/ironic
-                  - /var/log/containers/httpd/ironic-api:/var/log/httpd
-            command: {get_attr: [OnlineDataMigrationsCommand, value]}
       host_prep_tasks:
         - name: create persistent logs directory
           file:
@@ -185,102 +151,44 @@ outputs:
               /var/log/containers/ironic and /var/log/containers/httpd/ironic-*.
           ignore_errors: true
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if ironic_api is deployed
+          command: systemctl is-enabled --quiet openstack-ironic-api
           tags: common
-          block:
-            - name: get bootstrap nodeid
-              command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
-              register: bootstrap_node
-            - name: set is_bootstrap_node fact
-              set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
-            - name: Check if ironic_api is deployed
-              command: systemctl is-enabled --quiet openstack-ironic-api
-              ignore_errors: True
-              register: ironic_api_enabled_result
-            - name: Set fact ironic_api_enabled
-              set_fact:
-                ironic_api_enabled: "{{ ironic_api_enabled_result.rc == 0 }}"
-            - name: Check for ironic_api running under apache
-              shell: "httpd -t -D DUMP_VHOSTS | grep -q ironic"
-              ignore_errors: True
-              register: ironic_httpd_enabled_result
-            - name: Set fact ironic_httpd_enabled
-              set_fact:
-                ironic_httpd_enabled: "{{ ironic_httpd_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-ironic-api is running"
-              command: systemctl is-active --quiet openstack-ironic-api
-              when:
-                - ironic_api_enabled|bool
-              tags: validation
-            - name: Check if httpd service is running
-              command: systemctl is-active --quiet httpd
-              ignore_errors: True
-              register: httpd_running_result
-              when: httpd_running is undefined
-            - name: Set fact httpd_running
-              set_fact:
-                httpd_running: "{{ httpd_running_result.rc == 0 }}"
-              when: httpd_running is undefined
-            - name: "PreUpgrade step0,validation: Check if ironic_api_wsgi is running"
-              shell: systemctl status 'httpd' | grep -q ironic
-              tags: validation
-              when:
-                - ironic_httpd_enabled|bool
-                - httpd_running|bool
-            # NOTE: In puppet service variant, we ran release N online
-            # migrations before upgrade to release N+1. In docker
-            # service variant, we run release N online migrations
-            # after upgrade to release N. This means that during
-            # switch from non-containerized to containerized, we need
-            # to run both of these.
-            - name: Online data migration for Ironic before switching to containers
-              tags: pre-upgrade
-              when:
-                - is_bootstrap_node|bool
-                - (ironic_httpd_enabled|bool and httpd_running|bool) or ironic_api_enabled|bool
-              command: ironic-dbsync --config-file /etc/ironic/ironic.conf online_data_migrations
-        - when: step|int == 2
-          block:
-            - name: Stop and disable ironic_api service
-              when:
-                - ironic_api_enabled|bool
-              service: name=openstack-ironic-api state=stopped enabled=no
-            - name: Stop ironic_api service (running under httpd)
-              when:
-                - ironic_httpd_enabled|bool
-                - httpd_running|bool
-              service: name=httpd state=stopped enabled=no
-      fast_forward_upgrade_tasks:
-        - block:
-            - name: Check if ironic_api is deployed
-              command: systemctl is-enabled --quiet openstack-ironic-api
-              ignore_errors: True
-              register: ironic_api_enabled_result
-            - name: Set fact ironic_api_enabled
-              set_fact:
-                ironic_api_enabled: "{{ ironic_api_enabled_result.rc == 0 }}"
+          ignore_errors: True
+          register: ironic_api_enabled
+        - name: Check for ironic_api running under apache
+          tags: common
+          shell: "httpd -t -D DUMP_VHOSTS | grep -q ironic"
+          ignore_errors: True
+          register: httpd_enabled
+        - name: "PreUpgrade step0,validation: Check service openstack-ironic-api is running"
+          command: systemctl is-active --quiet openstack-ironic-api
           when:
             - step|int == 0
-            - release == 'ocata'
-        - name: Stop openstack-ironic-api
+            - ironic_api_enabled.rc == 0
+            - httpd_enabled.rc != 0
+          tags: validation
+        - name: Stop and disable ironic_api service
+          when:
+            - step|int == 2
+            - ironic_api_enabled.rc == 0
+            - httpd_enabled.rc != 0
           service: name=openstack-ironic-api state=stopped enabled=no
+        - name: Check if httpd service is running
+          command: systemctl is-active --quiet httpd
+          tags: common
+          ignore_errors: True
+          register: httpd_running
+        - name: "PreUpgrade step0,validation: Check if ironic_api_wsgi is running"
+          shell: systemctl status 'httpd' | grep -q ironic
+          tags: validation
           when:
-            - step|int == 1
-            - release == 'ocata'
-            - ironic_api_enabled|bool
-        - name: Ironic package update
-          shell: yum -y update openstack-ironic*
+            - step|int == 0
+            - httpd_enabled.rc == 0
+            - httpd_running.rc == 0
+        - name: Stop ironic_api service (running under httpd)
           when:
-            - step|int == 6
-            - is_bootstrap_node|bool
-        - name: Synchronize the database
-          command: ironic-dbsync --config-file /etc/ironic/ironic.conf upgrade
-          when:
-            - step|int == 8
-            - is_bootstrap_node|bool
-        - name: Do online data migration
-          command: ironic-dbsync --config-file /etc/ironic/ironic.conf online_data_migrations
-          when:
-            - step|int == 8
-            - is_bootstrap_node|bool
-            - release == 'pike'
+            - step|int == 2
+            - httpd_enabled.rc == 0
+            - httpd_running.rc == 0
+          service: name=httpd state=stopped enabled=no

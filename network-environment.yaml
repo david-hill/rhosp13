@@ -34,23 +34,3 @@ parameter_defaults:
       "bond_mode=balance-tcp lacp=active other-config:lacp-fallback-ab=true"
   NovaComputeExtraConfig:
     nova::compute::reserved_host_memory: 512
-  ExtraConfig:
-    snmp::ro_network: 10.0.0.0/8
-    snmp::location: qai2
-    snmp::contact: noc@expertcity.com
-    tripleo::profile::base::snmp::snmpd_config:
-      - 'createUser ro_snmp_user MD5 "786566a5b0f7092091b9684438606b7ce08798f2"'
-      - 'rouser ro_snmp_user_tripleo'
-      - 'proc  cron'
-      - 'includeAllDisks  10%'
-      - 'master agentx'
-      - 'trapsink localhost public'
-      - 'iquerySecName internalUser'
-      - 'rouser internalUser'
-      - 'defaultMonitors yes'
-      - 'linkUpDownNotifications yes'
-      - 'proc httpd'
-      - 'proc heat-engine'
-      - 'proc neutron-server'
-      - 'proc rabbitmq-server'
-      - 'proc haproxy'

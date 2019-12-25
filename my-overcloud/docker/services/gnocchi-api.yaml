@@ -55,11 +55,6 @@ parameters:
       description: >
         The Ceph cluster name must be at least 1 character and contain only
         letters and numbers.
-  GnocchiFileBasePath:
-    default: '/var/lib/gnocchi'
-    description: Path to use when file driver is used. This could be NFS or a
-      flat file.
-    type: string
 
 conditions:
 
@@ -144,18 +139,10 @@ outputs:
             image: *gnocchi_api_image
             user: root
             volumes:
-              - str_replace:
-                  template: GNOCCHI_FILE_BASE_PATH:GNOCCHI_FILE_BASE_PATH
-                  params: {GNOCCHI_FILE_BASE_PATH: {get_param: GnocchiFileBasePath}}
-            command:
-              - '/bin/bash'
-              - '-c'
-              - str_replace:
-                  template: 'chown -R gnocchi:gnocchi GNOCCHI_FILE_BASE_PATH'
-                  params: {GNOCCHI_FILE_BASE_PATH: {get_param: GnocchiFileBasePath}}
-        step_5:
+              - /var/lib/gnocchi:/var/lib/gnocchi:rw
+            command: ['/bin/bash', '-c', 'chown -R gnocchi:gnocchi /var/lib/gnocchi']
+        step_4:
           gnocchi_db_sync:
-            start_order: 0
             image: *gnocchi_api_image
             net: host
             detach: false
@@ -167,29 +154,23 @@ outputs:
                 -
                   - /var/lib/kolla/config_files/gnocchi_db_sync.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/gnocchi/:/var/lib/kolla/config_files/src:ro
-                  - str_replace:
-                      template: GNOCCHI_FILE_BASE_PATH:GNOCCHI_FILE_BASE_PATH
-                      params: {GNOCCHI_FILE_BASE_PATH: {get_param: GnocchiFileBasePath}}
+                  - /var/lib/gnocchi:/var/lib/gnocchi:rw
                   - /var/log/containers/gnocchi:/var/log/gnocchi
                   - /var/log/containers/httpd/gnocchi-api:/var/log/httpd
                   - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+        step_5:
           gnocchi_api:
             image: *gnocchi_api_image
-            start_order: 1
             net: host
             privileged: false
             restart: always
-            healthcheck:
-              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
-                  - str_replace:
-                      template: GNOCCHI_FILE_BASE_PATH:GNOCCHI_FILE_BASE_PATH
-                      params: {GNOCCHI_FILE_BASE_PATH: {get_param: GnocchiFileBasePath}}
+                  - /var/lib/gnocchi:/var/lib/gnocchi:rw
                   - /var/lib/kolla/config_files/gnocchi_api.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/gnocchi/:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/gnocchi:/var/log/gnocchi
@@ -227,54 +208,47 @@ outputs:
             path: /etc/ceph
             state: directory
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if gnocchi_api is deployed
+          command: systemctl is-enabled --quiet openstack-gnocchi-api
           tags: common
-          block:
-            - name: Check if gnocchi_api is deployed
-              command: systemctl is-enabled --quiet openstack-gnocchi-api
-              ignore_errors: True
-              register: gnocchi_api_enabled_result
-            - name: Set fact gnocchi_api_enabled
-              set_fact:
-                gnocchi_api_enabled: "{{ gnocchi_api_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-gnocchi-api is running"
-              command: systemctl is-active --quiet openstack-gnocchi-api
-              when:
-                - gnocchi_api_enabled|bool
-              tags: validation
-            - name: Check if httpd service is running
-              command: systemctl is-active --quiet httpd
-              ignore_errors: True
-              register: httpd_running_result
-              when: httpd_running is undefined
-            - name: Set fact httpd_running
-              set_fact:
-                httpd_running: "{{ httpd_running_result.rc == 0 }}"
-              when: httpd_running is undefined
-            - name: Check for gnocchi_api running under apache
-              shell: "httpd -t -D DUMP_VHOSTS | grep -q gnocchi"
-              ignore_errors: True
-              register: gnocchi_httpd_enabled_result
-            - name: set fact gnocchi_httpd_enabled
-              set_fact:
-                gnocchi_httpd_enabled: "{{ gnocchi_httpd_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check if gnocchi_api_wsgi is running"
-              shell: systemctl status 'httpd' | grep -q gnocchi
-              tags: validation
-              when:
-                - gnocchi_httpd_enabled|bool
-                - httpd_running|bool
-        - when: step|int == 2
-          block:
-            - name: Stop and disable gnocchi_api service
-              service: name=openstack-gnocchi-api state=stopped enabled=no
-              when:
-                - gnocchi_api_enabled|bool
-            - name: Stop and disable httpd service
-              when:
-                - gnocchi_httpd_enabled|bool
-                - httpd_running|bool
-              service: name=httpd state=stopped enabled=no
+          ignore_errors: True
+          register: gnocchi_api_enabled
+        - name: Check for gnocchi_api running under apache
+          tags: common
+          shell: "httpd -t -D DUMP_VHOSTS | grep -q gnocchi"
+          ignore_errors: True
+          register: httpd_enabled
+        - name: "PreUpgrade step0,validation: Check service openstack-gnocchi-api is running"
+          command: systemctl is-active --quiet openstack-gnocchi-api
+          when:
+            - step|int == 0
+            - gnocchi_api_enabled.rc == 0
+            - httpd_enabled.rc != 0
+          tags: validation
+        - name: Stop and disable gnocchi_api service
+          service: name=openstack-gnocchi-api state=stopped enabled=no
+          when:
+            - step|int == 2
+            - gnocchi_api_enabled.rc == 0
+            - httpd_enabled.rc != 0
+        - name: Check if httpd service is running
+          command: systemctl is-active --quiet httpd
+          tags: common
+          ignore_errors: True
+          register: httpd_running
+        - name: "PreUpgrade step0,validation: Check if gnocchi_api_wsgi is running"
+          shell: systemctl status 'httpd' | grep -q gnocchi
+          tags: validation
+          when:
+            - step|int == 0
+            - httpd_enabled.rc == 0
+            - httpd_running.rc == 0
+        - name: Stop and disable httpd service
+          when:
+            - step|int == 2
+            - httpd_enabled.rc == 0
+            - httpd_running.rc == 0
+          service: name=httpd state=stopped enabled=no
       metadata_settings:
         get_attr: [GnocchiApiPuppetBase, role_data, metadata_settings]
       fast_forward_upgrade_tasks:
@@ -350,4 +324,3 @@ outputs:
           when:
             - step|int == 8
             - is_bootstrap_node|bool
-            - gnocchi_api_enabled|bool

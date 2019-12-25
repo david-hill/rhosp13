@@ -63,13 +63,6 @@ outputs:
               dest: "/"
               merge: true
               preserve_properties: true
-          permissions:
-            - path: /var/log/ironic
-              owner: ironic:ironic
-              recurse: true
-            - path: /var/lib/ironic
-              owner: ironic:ironic
-              recurse: true
         /var/lib/kolla/config_files/ironic_pxe_tftp.json:
           config_files:
             - source: "/var/lib/kolla/config_files/src/*"
@@ -78,9 +71,6 @@ outputs:
               preserve_properties: true
           permissions:
             - path: /var/log/ironic
-              owner: ironic:ironic
-              recurse: true
-            - path: /var/lib/ironic
               owner: ironic:ironic
               recurse: true
       docker_config:
@@ -100,7 +90,7 @@ outputs:
                 -
                   - /var/lib/kolla/config_files/ironic_pxe_tftp.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/ironic/:/var/lib/kolla/config_files/src:ro
-                  - /var/lib/ironic:/var/lib/ironic/:shared
+                  - /var/lib/ironic:/var/lib/ironic/
                   - /dev/log:/dev/log
                   - /var/log/containers/ironic:/var/log/ironic
                   - /var/log/containers/httpd/ironic-pxe:/var/log/httpd
@@ -118,7 +108,7 @@ outputs:
                 -
                   - /var/lib/kolla/config_files/ironic_pxe_http.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/ironic/:/var/lib/kolla/config_files/src:ro
-                  - /var/lib/ironic:/var/lib/ironic/:shared
+                  - /var/lib/ironic:/var/lib/ironic/
                   - /var/log/containers/ironic:/var/log/ironic
                   - /var/log/containers/httpd/ironic-pxe:/var/log/httpd
             environment:

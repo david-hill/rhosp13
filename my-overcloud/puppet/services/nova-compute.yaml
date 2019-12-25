@@ -56,18 +56,6 @@ parameters:
     default: false
     description: Whether to enable or not the NFS backend for Cinder
     type: boolean
-  NovaNfsEnabled:
-    default: false
-    description: Whether to enable or not the NFS backend for Nova
-    type: boolean
-  NovaNfsShare:
-    default: ''
-    description: NFS share to mount for nova storage (when NovaNfsEnabled is true)
-    type: string
-  NovaNfsOptions:
-    default: 'context=system_u:object_r:nfs_t:s0'
-    description: NFS mount options for nova storage (when NovaNfsEnabled is true)
-    type: string
   CinderEnableRbdBackend:
     default: false
     description: Whether to enable or not the Rbd backend for Cinder
@@ -140,30 +128,6 @@ parameters:
     default: False
     description: Whether to verify image signatures.
     type: boolean
-  NovaLibvirtRxQueueSize:
-    description: >
-      virtio-net RX queue size. Valid values are 256, 512, 1024
-    default: 512
-    type: number
-    constraints:
-      - allowed_values: [ 256, 512, 1024 ]
-    tags:
-      - role_specific
-  NovaLibvirtTxQueueSize:
-    description: >
-      virtio-net TX queue size. Valid values are 256, 512, 1024
-    default: 512
-    type: number
-    constraints:
-      - allowed_values: [ 256, 512, 1024 ]
-    tags:
-      - role_specific
-
-conditions:
-  enable_live_migration_tunnelled:
-    or:
-      - equals: [{get_param: NovaNfsEnabled}, true]
-      - equals: [{get_param: NovaEnableRbdBackend}, true]
 
 resources:
   NovaBase:
@@ -187,14 +151,10 @@ resources:
           - map_replace:
             - nova::compute::vcpu_pin_set: NovaVcpuPinSet
               nova::compute::reserved_host_memory: NovaReservedHostMemory
-              nova::compute::libvirt::rx_queue_size: NovaLibvirtRxQueueSize
-              nova::compute::libvirt::tx_queue_size: NovaLibvirtTxQueueSize
             - values: {get_param: [RoleParameters]}
           - values:
               NovaVcpuPinSet: {get_param: NovaVcpuPinSet}
               NovaReservedHostMemory: {get_param: NovaReservedHostMemory}
-              NovaLibvirtRxQueueSize: {get_param: NovaLibvirtRxQueueSize}
-              NovaLibvirtTxQueueSize: {get_param: NovaLibvirtTxQueueSize}
 
 outputs:
   role_data:
@@ -236,7 +196,6 @@ outputs:
               - - 'client'
                 - {get_param: CephClientUserName}
             tripleo::profile::base::nova::compute::cinder_nfs_backend: {get_param: CinderEnableNfsBackend}
-            tripleo::profile::base::nova::compute::nova_nfs_enabled: {get_param: NovaNfsEnabled}
             rbd_persistent_storage: {get_param: CinderEnableRbdBackend}
             nova::compute::rbd::libvirt_rbd_secret_key: {get_param: CephClientKey}
             nova::compute::rbd::libvirt_rbd_secret_uuid: {get_param: CephClusterFSID}
@@ -250,11 +209,7 @@ outputs:
             # In future versions of QEMU (2.6, mostly), danpb's native
             # encryption work will obsolete the need to use TUNNELLED transport
             # mode.
-            nova::migration::live_migration_tunnelled:
-              if:
-              - enable_live_migration_tunnelled
-              - true
-              - false
+            nova::migration::live_migration_tunnelled: {get_param: NovaEnableRbdBackend}
             nova::compute::neutron::libvirt_vif_driver: {get_param: NovaComputeLibvirtVifDriver}
             # NOTE: bind IP is found in Heat replacing the network name with the
             # local node IP for the given network; replacement examples
@@ -283,14 +238,6 @@ outputs:
           tripleo.collectd.plugins.nova_compute:
             - virt
           collectd::plugin::virt::connection: 'qemu:///system'
-      host_prep_tasks:
-        - name: Mount Nova NFS Share
-          vars:
-            nfs_backend_enable: {get_param: NovaNfsEnabled}
-            nfs_share: {get_param: NovaNfsShare}
-            nfs_options: {get_param: NovaNfsOptions}
-          mount: name=/var/lib/nova/instances src="{{nfs_share}}" fstype=nfs4 opts="_netdev,bg,{{nfs_options}},vers=4,nfsvers=4" state=mounted
-          when: nfs_backend_enable|bool
       upgrade_tasks:
         - name: Stop nova-compute service
           when: step|int == 1

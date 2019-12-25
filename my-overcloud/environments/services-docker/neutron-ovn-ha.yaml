@@ -31,4 +31,3 @@ parameter_defaults:
     OVNCMSOptions: "enable-chassis-as-gw"
   NetworkerParameters:
     OVNCMSOptions: "enable-chassis-as-gw"
-  OVNDnsServers: []

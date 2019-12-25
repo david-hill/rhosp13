@@ -48,11 +48,6 @@ parameters:
       description: >
         The Ceph cluster name must be at least 1 character and contain only
         letters and numbers.
-  GnocchiFileBasePath:
-    default: '/var/lib/gnocchi'
-    description: Path to use when file driver is used. This could be NFS or a
-      flat file.
-    type: string
 
 resources:
 
@@ -118,24 +113,19 @@ outputs:
       docker_config:
         step_5:
           gnocchi_metricd:
-            start_order: 1
             image: {get_param: DockerGnocchiMetricdImage}
             net: host
             privileged: false
             restart: always
-            healthcheck:
-              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/gnocchi_metricd.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/gnocchi/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/gnocchi:/var/lib/gnocchi:rw
                   - /var/log/containers/gnocchi:/var/log/gnocchi
                   - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
-                  - str_replace:
-                      template: GNOCCHI_FILE_BASE_PATH:GNOCCHI_FILE_BASE_PATH
-                      params: {GNOCCHI_FILE_BASE_PATH: {get_param: GnocchiFileBasePath}}
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
@@ -155,25 +145,22 @@ outputs:
             path: /etc/ceph
             state: directory
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if gnocchi_metricd is deployed
+          command: systemctl is-enabled --quiet openstack-gnocchi-metricd
           tags: common
-          block:
-            - name: Check if gnocchi_metricd is deployed
-              command: systemctl is-enabled --quiet openstack-gnocchi-metricd
-              ignore_errors: True
-              register: gnocchi_metricd_enabled_result
-            - name: Set fact gnocchi_metricd_enabled
-              set_fact:
-                gnocchi_metricd_enabled: "{{ gnocchi_metricd_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-gnocchi-metricd is running"
-              command: systemctl is-active --quiet openstack-gnocchi-metricd
-              when: gnocchi_metricd_enabled|bool
-              tags: validation
-        - when: step|int == 2
-          block:
-            - name: Stop and disable openstack-gnocchi-metricd service
-              when: gnocchi_metricd_enabled|bool
-              service: name=openstack-gnocchi-metricd.service state=stopped enabled=no
+          ignore_errors: True
+          register: gnocchi_metricd_enabled
+        - name: "PreUpgrade step0,validation: Check service openstack-gnocchi-metricd is running"
+          command: systemctl is-active --quiet openstack-gnocchi-metricd
+          when:
+            - step|int == 0
+            - gnocchi_metricd_enabled.rc == 0
+          tags: validation
+        - name: Stop and disable openstack-gnocchi-metricd service
+          when:
+            - step|int == 2
+            - gnocchi_metricd_enabled.rc == 0
+          service: name=openstack-gnocchi-metricd.service state=stopped enabled=no
       fast_forward_upgrade_tasks:
         - name: FFU check if openstack-gnocchi-metricd is deployed
           command: systemctl is-enabled --quiet openstack-gnocchi-metricd

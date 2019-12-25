@@ -132,7 +132,6 @@ outputs:
                   - /var/lib/config-data/puppet-generated/horizon/:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/horizon:/var/log/horizon
                   - /var/log/containers/httpd/horizon:/var/log/httpd
-                  - /var/www/:/var/www/:ro
                   -
                     if:
                       - internal_tls_enabled
@@ -148,7 +147,6 @@ outputs:
               # Installed plugins:
               - ENABLE_IRONIC=yes
               - ENABLE_MANILA=yes
-              - ENABLE_HEAT=yes
               - ENABLE_MISTRAL=yes
               - ENABLE_OCTAVIA=yes
               - ENABLE_SAHARA=yes
@@ -185,24 +183,21 @@ outputs:
               /var/log/containers/horizon and /var/log/containers/httpd/horizon.
           ignore_errors: true
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check for horizon running under apache
           tags: common
-          block:
-            - name: Check for horizon running under apache
-              shell: "httpd -t -D DUMP_VHOSTS | grep -q horizon_vhost"
-              ignore_errors: True
-              register: horizon_httpd_enabled_result
-            - set_fact:
-                horizon_httpd_enabled: "{{ horizon_httpd_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check if horizon is running"
-              shell: systemctl is-active --quiet httpd
-              when:
-                - horizon_httpd_enabled|bool
-              tags: validation
+          shell: "httpd -t -D DUMP_VHOSTS | grep -q horizon_vhost"
+          ignore_errors: True
+          register: httpd_enabled
+        - name: "PreUpgrade step0,validation: Check if horizon is running"
+          shell: systemctl is-active --quiet httpd
+          when:
+            - step|int == 0
+            - httpd_enabled.rc == 0
+          tags: validation
         - name: Stop and disable horizon service (running under httpd)
           when:
             - step|int == 2
-            - horizon_httpd_enabled|bool
+            - httpd_enabled.rc == 0
           service: name=httpd state=stopped enabled=no
       metadata_settings:
         get_attr: [HorizonBase, role_data, metadata_settings]

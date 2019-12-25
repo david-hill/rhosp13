@@ -11,8 +11,6 @@
     - Storage
   HostnameFormatDefault: '%stackname%-novacomputeiha-%index%'
   disable_upgrade_deployment: True
-  RoleParametersDefault:
-    TunedProfileName: "virtual-host"
   ServicesDefault:
     - OS::TripleO::Services::Aide
     - OS::TripleO::Services::AuditD

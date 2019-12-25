@@ -67,9 +67,6 @@ resources:
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
-  ManilaCommon:
-    type: ./manila-common.yaml
-
 outputs:
   role_data:
     description: Role data for the Manila Share role.
@@ -82,7 +79,7 @@ outputs:
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: manila
-        puppet_tags: manila_config,file,concat,file_line
+        puppet_tags: manila_config
         step_config:
           list_join:
             - "\n"
@@ -119,8 +116,16 @@ outputs:
             image: &manila_share_image {get_param: DockerManilaShareImage}
             net: host
             restart: always
-            volumes: {get_attr: [ManilaCommon, manila_share_volumes]}
-            environment: {get_attr: [ManilaCommon, manila_share_environment]}
+            volumes:
+               list_concat:
+                 - {get_attr: [ContainersCommon, volumes]}
+                 -
+                   - /var/lib/kolla/config_files/manila_share.json:/var/lib/kolla/config_files/config.json:ro
+                   - /var/lib/config-data/puppet-generated/manila/:/var/lib/kolla/config_files/src:ro
+                   - /var/log/containers/manila:/var/log/manila
+                   - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
+            environment:
+              - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -141,42 +146,19 @@ outputs:
             path: /etc/ceph
             state: directory
       upgrade_tasks:
-        - when: step|int == 0
-          tags: common
-          block:
-            - name: Check if manila_scheduler is deployed
-              command: systemctl is-enabled --quiet openstack-manila-scheduler
-              ignore_errors: True
-              register: manila_scheduler_enabled_result
-            - name: Set fact manila_scheduler_enabled
-              set_fact:
-                manila_scheduler_enabled: "{{ manila_scheduler_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-manila-scheduler is running"
-              command: systemctl is-active --quiet openstack-manila-scheduler
-              when: manila_scheduler_enabled|bool
-              tags: validation
-        - when: step|int == 2
-          block:
-            - name: Stop and disable manila_scheduler service
-              when: manila_scheduler_enabled|bool
-              service: name=openstack-manila-scheduler state=stopped enabled=no
-      fast_forward_upgrade_tasks:
         - name: Check if manila_share is deployed
           command: systemctl is-enabled --quiet openstack-manila-share
+          tags: common
           ignore_errors: True
-          register: manila_share_enabled_result
+          register: manila_share_enabled
+        - name: "PreUpgrade step0,validation: Check service openstack-manila-share is running"
+          command: systemctl is-active --quiet openstack-manila-share
           when:
             - step|int == 0
-            - release == 'ocata'
-        - name: Set fact manila_share_enabled
-          set_fact:
-            manila_share_enabled: "{{ manila_share_enabled_result.rc == 0 }}"
+            - manila_share_enabled.rc == 0
+          tags: validation
+        - name: Stop and disable manila_share service
           when:
-            - step|int == 0
-            - release == 'ocata'
-        - name: Stop openstack-manila-share
+            - step|int == 2
+            - manila_share_enabled.rc == 0
           service: name=openstack-manila-share state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - manila_share_enabled|bool

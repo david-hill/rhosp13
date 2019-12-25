@@ -55,7 +55,7 @@ resources:
             - vars: RhsmVars
             - values: {get_param: [RoleParameters]}
           - values:
-              RhsmVars: {get_param: RhsmVars}
+              vars: {get_param: RhsmVars}
 
 outputs:
   role_data:
@@ -68,6 +68,7 @@ outputs:
       step_config: ''
       host_prep_tasks:
         - name: Red Hat Subscription Management configuration
-          import_role:
-            name: redhat-subscription
           vars: {get_attr: [RoleParametersValue, value, vars]}
+          block:
+          - include_role:
+              name: redhat-subscription

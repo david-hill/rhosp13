@@ -1,7 +1,6 @@
 resource_registry:
-   # FIXME(bogdando): switch it, once it is containerized
    OS::TripleO::Services::LiquidioCompute:  ../puppet/services/liquidio-compute-config.yaml
-   OS::TripleO::Services::NeutronMetadataAgent: ../docker/services/neutron-metadata.yaml
+   OS::TripleO::Services::NeutronMetadataAgent: ../puppet/services/neutron-metadata.yaml
 
 parameter_defaults:
    LiquidioSriovVfNum: 4

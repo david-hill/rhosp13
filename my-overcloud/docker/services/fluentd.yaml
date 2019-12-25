@@ -102,7 +102,6 @@ outputs:
                   - /var/lib/config-data/puppet-generated/fluentd/:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers:/var/log/containers:ro
                   - /var/log/containers/fluentd:/var/log/fluentd:rw
-                  - /etc/rsyslog.d:/etc/rsyslog.d:rw
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
@@ -122,21 +121,22 @@ outputs:
             path: /var/cache/containers/fluentd
             state: directory
       upgrade_tasks:
-        - when: step|int == 0
-          tags: common
-          block:
-            - name: Check if fluent.service is deployed
-              command: systemctl is-enabled --quiet fluentd.service
-              ignore_errors: True
-              register: fluentd_enabled_result
-            - name: Set fact fluentd_enabled
-              set_fact:
-                fluentd_enabled: "{{ fluentd_enabled_result.rc == 0 }}"
-        - when: step|int == 2
-          block:
-            - name: Stop and disable fluentd service
-              service: name=fluentd.service state=stopped enabled=no
-              when: fluentd_enabled|bool
+        - name: Check if fluent.service is deployed
+          command: systemctl is-enabled --quiet fluentd.service
+          ignore_errors: True
+          register: fluentd_enabled_result
+          when:
+            - step|int == 0
+        - name: Set fact fluentd_enabled
+          set_fact:
+            fluentd_enabled: "{{ fluentd_enabled_result.rc == 0 }}"
+          when:
+            - step|int == 0
+        - name: Stop and disable fluentd service
+          service: name=fluentd.service state=stopped enabled=no
+          when:
+            - step|int == 2
+            - fluentd_enabled|bool
       fast_forward_upgrade_tasks:
         - name: Check if fluent.service is deployed
           command: systemctl is-enabled --quiet fluentd.service

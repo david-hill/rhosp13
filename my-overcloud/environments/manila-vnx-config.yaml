@@ -12,8 +12,7 @@ parameter_defaults:
   ManilaVNXNasLogin: ''
   ManilaVNXNasPassword: ''
   ManilaVNXNasServer: ''
-  ManilaVNXServerContainer: ''
+  ManilaVNXServerMetaPool: ''
   ManilaVNXShareDataPools: ''
   ManilaVNXEthernetPorts: ''
-  ManilaVNXEmcSslCertVerify: false
-  ManilaVNXEmcSslCertPath: ''
+

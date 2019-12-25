@@ -1,5 +1,5 @@
 # A Heat environment file which can be used to enable OVN
-# extensions, configured via docker
+# extensions
 resource_registry:
   OS::TripleO::Services::NeutronCorePlugin: OS::TripleO::Services::NeutronCorePluginML2OVN
   OS::TripleO::Services::OVNController: ../docker/services/ovn-controller.yaml
@@ -29,5 +29,4 @@ parameter_defaults:
     NeutronBridgeMappings: ""
   NetworkerParameters:
     OVNCMSOptions: "enable-chassis-as-gw"
-  OVNDnsServers: []
-  KernelIpNonLocalBind: 1
+

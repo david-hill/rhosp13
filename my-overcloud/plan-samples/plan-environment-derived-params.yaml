@@ -6,8 +6,6 @@ description: >
 template: overcloud.yaml
 environments:
   - path: overcloud-resource-registry-puppet.yaml
-  - path: environments/docker.yaml
-  - path: environments/docker-ha.yaml
 workflow_parameters:
   tripleo.derive_params.v1.derive_parameters:
     ######### DPDK Parameters #########

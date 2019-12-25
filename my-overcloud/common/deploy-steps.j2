@@ -79,9 +79,6 @@ parameters:
     type: comma_delimited_list
     default: ['ocata', 'pike', 'queens']
     description: List of releases to fast forward through during upgrade. Last release in list is used for post steps.
-  ssh_known_hosts_hostnames:
-    description: Mapping of hostname to ssh known hosts entry
-    type: json
 
 conditions:
 {% for step in range(1, deploy_steps_max) %}
@@ -106,7 +103,7 @@ resources:
         modulepath: /usr/share/ansible-modules
       inputs:
         - name: step
-        - name: tripleo_role_name
+        - name: role_name
         - name: update_identifier
         - name: bootstrap_server_id
         - name: enable_debug
@@ -200,7 +197,6 @@ resources:
           workflow: { get_resource: WorkflowTasks_Step{{step}} }
           params:
             env:
-              heat_stack_name: { get_param: stack_name }
               service_ips: { get_param: ctlplane_service_ips }
               role_merged_configs:
                 {%- for r in roles %}
@@ -213,7 +209,6 @@ resources:
           workflow: { get_resource: WorkflowTasks_Step{{step}} }
           params:
             env:
-              heat_stack_name: { get_param: stack_name }
               service_ips: { get_param: ctlplane_service_ips }
               role_merged_configs:
                 {%- for r in roles %}
@@ -231,11 +226,7 @@ resources:
     properties:
       value:
         yaql:
-          # Use a constant string of "bootstrap_server_id" when there are no
-          # servers in the primary role, such as in the case when all
-          # Controllers are blacklisted. No server id's will match the string
-          # which is what we want when all are blacklisted.
-          expression: switch($.data = {} => "no_bootstrap_server", $.data != {} => $.data.items().orderBy($[0]).first()[1])
+          expression: $.data.items().orderBy($[0]).first()[1]
           data: {get_param: [servers, {{primary_role_name}}]}
 
 # Artifacts config and HostPrepConfig is done on all roles, not only
@@ -330,7 +321,7 @@ resources:
       config: {get_resource: RoleConfig}
       input_values:
         step: {{step}}
-        tripleo_role_name: {{role.name}}
+        role_name: {{role.name}}
         update_identifier: {get_param: DeployIdentifier}
         bootstrap_server_id: {get_attr: [BootstrapServerId, value]}
         enable_debug: {get_param: ConfigDebug}
@@ -382,7 +373,6 @@ outputs:
     value:
       global_vars:
         deploy_steps_max: {{deploy_steps_max}}
-        ssh_known_hosts: {get_param: ssh_known_hosts_hostnames}
       common_deploy_steps_tasks: {get_file: deploy-steps-tasks.yaml}
       docker_puppet_script: {get_file: ../docker/docker-puppet.py}
       deploy_steps_playbook:
@@ -396,13 +386,11 @@ outputs:
               become: false
               tags:
                 - facts
-
             - hosts: overcloud
               name: Gather facts overcloud
               gather_facts: yes
               tags:
                 - facts
-
             - hosts: all
               name: Load global variables
               gather_facts: no
@@ -410,18 +398,15 @@ outputs:
                 - include_vars: global_vars.yaml
               tags:
                 - always
-
             - hosts: overcloud
-              name: Common roles for TripleO servers
+              name: Bootstrap TripleO servers
               gather_facts: no
               any_errors_fatal: yes
               roles:
                 - tripleo-bootstrap
-                - tripleo-ssh-known-hosts
               tags:
-                - common_roles
-
-            - hosts: {{primary_role_name}}:overcloud
+                - bootstrap
+            - hosts: overcloud
               name: Server deployments
               gather_facts: no
               any_errors_fatal: yes
@@ -430,14 +415,13 @@ outputs:
                 - include: {{role.name}}/deployments.yaml
                   vars:
                     force: false
-                  when: tripleo_role_name == '{{role.name}}'
+                  when: role_name == '{{role.name}}'
                   with_items: "{{ '{{' }} {{role.name}}_pre_deployments|default([]) {{ '}}' }}"
 {%- endfor %}
               tags:
                 - overcloud
                 - pre_deploy_steps
-
-            - hosts: {{primary_role_name}}:overcloud
+            - hosts: overcloud
               name: Host prep steps
               gather_facts: no
               any_errors_fatal: yes
@@ -447,14 +431,12 @@ outputs:
               tasks:
 {%- for role in roles %}
                 - include: {{role.name}}/host_prep_tasks.yaml
-                  when: tripleo_role_name == '{{role.name}}'
+                  when: role_name == '{{role.name}}'
 {%- endfor %}
               tags:
                 - overcloud
                 - host_prep_steps
-
 {%- for step in range(1,deploy_steps_max) %}
-
             - hosts: undercloud
               name: External deployment step {{step}}
               gather_facts: no
@@ -467,8 +449,7 @@ outputs:
               tags:
                 - external
                 - external_deploy_steps
-
-            - hosts: {{primary_role_name}}:overcloud
+            - hosts: overcloud
               name: Overcloud deploy step tasks for {{step}}
               gather_facts: no
               any_errors_fatal: yes
@@ -481,13 +462,12 @@ outputs:
               tasks:
 {%- for role in roles %}
                 - include: {{role.name}}/deploy_steps_tasks.yaml
-                  when: tripleo_role_name == '{{role.name}}'
+                  when: role_name == '{{role.name}}'
 {%- endfor %}
               tags:
                 - overcloud
                 - deploy_steps
-
-            - hosts: {{primary_role_name}}:overcloud
+            - hosts: overcloud
               name: Overcloud common deploy step tasks {{step}}
               gather_facts: no
               any_errors_fatal: yes
@@ -499,9 +479,8 @@ outputs:
               tags:
                 - overcloud
                 - deploy_steps
-
 {%- endfor %}
-            - hosts: {{primary_role_name}}:overcloud
+            - hosts: overcloud
               name: Server Post Deployments
               gather_facts: no
               any_errors_fatal: yes
@@ -510,13 +489,12 @@ outputs:
                 - include: {{role.name}}/deployments.yaml
                   vars:
                     force: false
-                  when: tripleo_role_name == '{{role.name}}'
+                  when: role_name == '{{role.name}}'
                   with_items: "{{ '{{' }} {{role.name}}_post_deployments|default([]) {{ '}}' }}"
 {%- endfor %}
               tags:
                 - overcloud
                 - post_deploy_steps
-
             - hosts: undercloud
               name: External deployment Post Deploy tasks
               gather_facts: no
@@ -527,13 +505,12 @@ outputs:
               tags:
                 - external
                 - external_deploy_steps
-
       external_deploy_steps_tasks: {get_attr: [ExternalDeployTasks, value]}
       external_post_deploy_steps_tasks: {get_attr: [ExternalPostDeployTasks, value]}
       update_steps_tasks: |
 {%- for role in roles %}
             - include: {{role.name}}/update_tasks.yaml
-              when: tripleo_role_name == '{{role.name}}'
+              when: role_name == '{{role.name}}'
 {%- endfor %}
       update_steps_playbook: |
         - hosts: undercloud
@@ -557,22 +534,14 @@ outputs:
               with_sequence: start=0 end={{update_steps_max-1}}
               loop_control:
                 loop_var: step
-{%- for role in roles %}
-            - include: {{role.name}}/host_prep_tasks.yaml
-              when: role_name == '{{role.name}}'
-{%- endfor %}
             - include: common_deploy_steps_tasks.yaml
               with_sequence: start=1 end={{deploy_steps_max-1}}
-              loop_control:
-                loop_var: step
-            - include: post_update_steps_tasks.yaml
-              with_sequence: start=0 end={{post_update_steps_max-1}}
               loop_control:
                 loop_var: step
       pre_upgrade_rolling_steps_tasks: |
 {%- for role in roles %}
             - include: {{role.name}}/pre_upgrade_rolling_tasks.yaml
-              when: tripleo_role_name == '{{role.name}}'
+              when: role_name == '{{role.name}}'
 {%- endfor %}
       pre_upgrade_rolling_steps_playbook: |
         - hosts: undercloud
@@ -599,7 +568,7 @@ outputs:
       upgrade_steps_tasks: |
 {%- for role in roles %}
             - include: {{role.name}}/upgrade_tasks.yaml
-              when: tripleo_role_name == '{{role.name}}'
+              when: role_name == '{{role.name}}'
 {%- endfor %}
       upgrade_steps_playbook: |
         - hosts: overcloud
@@ -611,7 +580,7 @@ outputs:
       post_upgrade_steps_tasks: |
 {%- for role in roles %}
             - include: {{role.name}}/post_upgrade_tasks.yaml
-              when: tripleo_role_name == '{{role.name}}'
+              when: role_name == '{{role.name}}'
 {%- endfor %}
       post_upgrade_steps_playbook: |
         - hosts: overcloud
@@ -654,7 +623,7 @@ outputs:
                       rm -f /usr/libexec/os-apply-config/templates/etc/puppet/hiera.yaml
                       rm -f /usr/libexec/os-refresh-config/configure.d/10-hiera-disable
                     fi
-                  when: tripleo_role_name == '{{role.name}}'
+                  when: role_name == '{{role.name}}'
                   name: Run Fast Forward Upgrade Prep Workarounds for {{role.name}}
 {%- endfor %}
 {% raw %}
@@ -679,7 +648,7 @@ outputs:
       fast_forward_upgrade_post_role_tasks: |
 {%- for role in roles %}
                 - include_tasks: {{role.name}}/fast_forward_post_upgrade_tasks.yaml
-                  when: tripleo_role_name == '{{role.name}}'
+                  when: role_name == '{{role.name}}'
 {%- endfor %}
                 - name: Openstack Heat Agents package update
                   yum: name=openstack-heat-agents state=latest
@@ -690,7 +659,7 @@ outputs:
       fast_forward_upgrade_prep_role_tasks: |
 {%- for role in roles %}
                 - include_tasks: {{role.name}}/fast_forward_upgrade_tasks.yaml
-                  when: tripleo_role_name == '{{role.name}}'
+                  when: role_name == '{{role.name}}'
 {%- endfor %}
       fast_forward_upgrade_bootstrap_tasks: |
                 - include_tasks: fast_forward_upgrade_bootstrap_role_tasks.yaml
@@ -700,10 +669,17 @@ outputs:
       fast_forward_upgrade_bootstrap_role_tasks: |
 {%- for role in roles %}
                 - include_tasks: {{role.name}}/fast_forward_upgrade_tasks.yaml
-                  when: tripleo_role_name == '{{role.name}}' and ansible_hostname == {{role.name}}[0]
+                  when: role_name == '{{role.name}}' and ansible_hostname == {{role.name}}[0]
 {%- endfor %}
       post_update_steps_tasks: |
 {%- for role in roles %}
             - include: {{role.name}}/post_update_tasks.yaml
-              when: tripleo_role_name == '{{role.name}}'
+              when: role_name == '{{role.name}}'
 {%- endfor %}
+      post_update_steps_playbook: |
+        - hosts: overcloud
+          tasks:
+            - include: post_update_steps_tasks.yaml
+              with_sequence: start=0 end={{post_update_steps_max-1}}
+              loop_control:
+                loop_var: step

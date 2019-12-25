@@ -61,11 +61,6 @@ parameters:
     description: >
       Setting this to a unique value will re-run any deployment tasks which
       perform configuration on a Heat stack-update.
-  PcmkConfigRestartTimeout:
-    default: 600
-    description: Time in seconds to wait for a pcmk resource to restart when
-                 a config change is detected and the resource is being restarted
-    type: number
 
 resources:
 
@@ -252,28 +247,6 @@ outputs:
               - /usr/bin:/usr/bin:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
         step_2:
-          mysql_restart_bundle:
-            start_order: 0
-            config_volume: mysql
-            detach: false
-            net: host
-            user: root
-            command:
-              - '/usr/bin/bootstrap_host_exec'
-              - 'mysql'
-              - str_replace:
-                  template:
-                    'if /usr/sbin/pcs resource show galera-bundle; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT galera-bundle; echo "galera-bundle restart invoked"; fi'
-                  params:
-                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
-            image: {get_param: DockerMysqlImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - /dev/shm:/dev/shm:rw
-                  - /var/lib/config-data/puppet-generated/mysql/:/var/lib/kolla/config_files/src:ro
           mysql_init_bundle:
             start_order: 1
             detach: false
@@ -350,43 +323,23 @@ outputs:
             # Got to check that pacemaker_is_active is working fine with bundle.
             # TODO: pacemaker_is_active resource doesn't support bundle.
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Get docker Mysql image
+          set_fact:
+            mysql_docker_image_latest: *mysql_image_pcmklatest
+        - name: Check for Mysql Kolla configuration
+          stat:
+            path: /var/lib/config-data/puppet-generated/mysql
+          register: mysql_kolla_config
+        - name: Check if Mysql is already containerized
+          set_fact:
+            mysql_containerized: "{{mysql_kolla_config.stat.isdir | default(false)}}"
+        - name: get bootstrap nodeid
           tags: common
-          block:
-            - name: Get docker Mysql image
-              set_fact:
-                mysql_docker_image_latest: *mysql_image_pcmklatest
-            - name: Check for Mysql Kolla configuration
-              stat:
-                path: /var/lib/config-data/puppet-generated/mysql
-              register: mysql_kolla_config
-            - name: Check if Mysql is already containerized
-              set_fact:
-                mysql_containerized: "{{mysql_kolla_config.stat.isdir | default(false)}}"
-            - name: get bootstrap nodeid
-              command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
-              register: bootstrap_node
-            - name: set is_bootstrap_node fact
-              set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
-            - name: Prepare the switch to new galera container image name in pacemaker
-              when: mysql_containerized|bool
-              block:
-                - name: Get galera image id currently used by pacemaker
-                  shell: "docker images | awk '/mariadb.* pcmklatest/{print $3}' | uniq"
-                  register: galera_current_pcmklatest_id
-                - name: Temporarily tag the current galera image id with the upgraded image name
-                  shell: "docker tag {{galera_current_pcmklatest_id.stdout}} {{mysql_docker_image_latest}}"
-                  when: galera_current_pcmklatest_id.stdout != ''
-            - name: Check galera cluster resource status
-              pacemaker_resource:
-                resource: galera
-                state: show
-                check_mode: false
-              ignore_errors: true
-              register: galera_pcs_res_result
-            - name: Set fact galera_pcs_res
-              set_fact:
-                galera_pcs_res: "{{galera_pcs_res_result|succeeded}}"
+          command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
+          register: bootstrap_node
+        - name: set is_bootstrap_node fact
+          tags: common
+          set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
         - name: Mysql baremetal to container upgrade tasks
           when:
             - step|int == 1
@@ -423,12 +376,30 @@ outputs:
               file: state=absent path=/etc/xinetd.d/galera-monitor
             - name: Restart xinetd service after clustercheck removal
               service: name=xinetd state=restarted
+        - name: Prepare the switch to new galera container image name in pacemaker
+          when:
+            - step|int == 0
+            - mysql_containerized|bool
+          block:
+            - name: Get galera image id currently used by pacemaker
+              shell: "docker images | awk '/mariadb.* pcmklatest/{print $3}' | uniq"
+              register: galera_current_pcmklatest_id
+            - name: Temporarily tag the current galera image id with the upgraded image name
+              shell: "docker tag {{galera_current_pcmklatest_id.stdout}} {{mysql_docker_image_latest}}"
+
+        - name: Check galera cluster resource status
+          pacemaker_resource:
+            resource: galera
+            state: show
+            check_mode: false
+          ignore_errors: true
+          register: galera_pcs_res
         - name: Update galera pcs resource bundle for new container image
           when:
             - step|int == 1
             - mysql_containerized|bool
             - is_bootstrap_node
-            - galera_pcs_res|bool
+            - galera_pcs_res|succeeded
           block:
             - name: Disable the galera cluster resource before container upgrade
               pacemaker_resource:
@@ -507,19 +478,3 @@ outputs:
             - name: Upgrade Mysql database from the host
               shell: /bin/bash -ecx "{{mysql_upgrade_script}}"
               when: not mysql_containerized|bool
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 6
-            - release == 'ocata'
-            - is_bootstrap_node|bool
-          block:
-            - name: Create cell0 db
-              mysql_db:
-                name: nova_cell0
-                state: present
-            - name: Grant access to cell0 db
-              mysql_user:
-                name: nova
-                host_all: yes
-                state: present
-                priv: '*.*:ALL'

@@ -139,17 +139,10 @@ outputs:
               dest: "/"
               merge: true
               preserve_properties: true
-            - source: "/var/lib/kolla/config_files/src-tls/*"
-              dest: "/"
-              merge: true
-              preserve_properties: true
-              optional: true
           permissions:
             - path: /var/log/nova
               owner: nova:nova
               recurse: true
-            - path: /etc/pki/tls/private/novnc_proxy.key
-              owner: root:nova
       docker_config:
         step_4:
           nova_vnc_proxy:
@@ -180,8 +173,6 @@ outputs:
                                 - get_param: LibvirtVncCACert
                       - /etc/pki/libvirt-vnc/client-cert.pem:/etc/pki/libvirt-vnc/client-cert.pem:ro
                       - /etc/pki/libvirt-vnc/client-key.pem:/etc/pki/libvirt-vnc/client-key.pem:ro
-                      - /etc/pki/tls/certs/novnc_proxy.crt:/var/lib/kolla/config_files/src-tls/etc/pki/tls/certs/novnc_proxy.crt:ro
-                      - /etc/pki/tls/private/novnc_proxy.key:/var/lib/kolla/config_files/src-tls/etc/pki/tls/private/novnc_proxy.key:ro
                     - null
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
@@ -189,34 +180,32 @@ outputs:
         get_attr: [NovaVncProxyPuppetBase, role_data, metadata_settings]
       host_prep_tasks: {get_attr: [NovaLogging, host_prep_tasks]}
       upgrade_tasks:
-        - when: step|int == 0
+        - name: Check if nova vncproxy is deployed
+          command: systemctl is-enabled --quiet openstack-nova-novncproxy
           tags: common
-          block:
-            - name: Check if nova vncproxy is deployed
-              command: systemctl is-enabled --quiet openstack-nova-novncproxy
-              ignore_errors: True
-              register: nova_vncproxy_enabled_result
-            - name: Set fact nova_vncproxy_enabled
-              set_fact:
-                nova_vncproxy_enabled: "{{ nova_vncproxy_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-nova-novncproxy is running"
-              command: systemctl is-active --quiet openstack-nova-novncproxy
-              tags: validation
-              when: nova_vncproxy_enabled|bool
-        - when: step|int == 2
-          block:
-            - name: Stop and disable nova_vnc_proxy service
-              when: nova_vncproxy_enabled|bool
-              service: name=openstack-nova-novncproxy state=stopped enabled=no
-        - when: step|int == 3
-          block:
-            - name: Set fact for removal of openstack-nova-novncproxy package
-              set_fact:
-                remove_nova_novncproxy_package: {get_param: UpgradeRemoveUnusedPackages}
-            - name: Remove openstack-nova-novncproxy package if operator requests it
-              yum: name=openstack-nova-novncproxy state=removed
-              ignore_errors: True
-              when: remove_nova_novncproxy_package|bool
+          ignore_errors: True
+          register: nova_vncproxy_enabled
+        - name: "PreUpgrade step0,validation: Check service openstack-nova-novncproxy is running"
+          command: systemctl is-active --quiet openstack-nova-novncproxy
+          tags: validation
+          when:
+            - step|int == 0
+            - nova_vncproxy_enabled.rc == 0
+        - name: Stop and disable nova_vnc_proxy service
+          when:
+            - step|int == 2
+            - nova_vncproxy_enabled.rc == 0
+          service: name=openstack-nova-novncproxy state=stopped enabled=no
+        - name: Set fact for removal of openstack-nova-novncproxy package
+          when: step|int == 2
+          set_fact:
+            remove_nova_novncproxy_package: {get_param: UpgradeRemoveUnusedPackages}
+        - name: Remove openstack-nova-novncproxy package if operator requests it
+          yum: name=openstack-nova-novncproxy state=removed
+          ignore_errors: True
+          when:
+            - step|int == 2
+            - remove_nova_novncproxy_package|bool
       fast_forward_upgrade_tasks:
         - name: Check if nova vncproxy is deployed
           command: systemctl is-enabled --quiet openstack-nova-novncproxy

@@ -68,7 +68,7 @@ parameters:
                  image. Only applies to format 2 images. Set to '1' for Jewel
                  clients using older Ceph servers.
     type: string
-  ManilaCephFSCephFSAuthId:
+  ManilaCephFSNativeCephFSAuthId:
     type: string
     default: 'manila'
   CephManilaClientKey:
@@ -112,7 +112,7 @@ outputs:
                 CEPH_CLIENT_KEY:
                   list_join: ['.', ['client', {get_param: CephClientUserName}]]
                 MANILA_CLIENT_KEY:
-                  list_join: ['.', ['client', {get_param: ManilaCephFSCephFSAuthId}]]
+                  list_join: ['.', ['client', {get_param: ManilaCephFSNativeCephFSAuthId}]]
         ceph::profile::params::manage_repo: false
         # FIXME(gfidente): we should not have to list the packages explicitly in
         # the templates, but this should stay until the following is fixed:
@@ -120,5 +120,6 @@ outputs:
         ceph::params::packages:
           - ceph-base
           - ceph-mon
+          - ceph-osd
       step_config: |
         include ::tripleo::profile::base::ceph::client

@@ -10,7 +10,6 @@ resource_registry:
 parameter_defaults:
   # ensure we enable ip_forward before docker gets run
   KernelIpForward: 1
-  KernelIpNonLocalBind: 1
   EnablePackageInstall: true
   StackAction: CREATE
   SoftwareConfigTransport: POLL_SERVER_HEAT
