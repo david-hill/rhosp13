@@ -1,0 +1,49 @@
+heat_template_version: queens
+
+description: >
+  Extra hostname configuration
+
+parameters:
+  servers:
+    type: json
+  mgmt_intf:
+    type: string
+  mh_intf:
+    type: string
+  ar_intf:
+    type: string
+  DeployIdentifier:
+    type: string
+
+resources:
+  CustomExtraConfig:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: script
+      config:
+        str_replace:
+          template: |
+            #!/bin/sh
+            echo "mgmt-intf: _MGMT_INTF_" >> /mnt/prov.ini
+            echo "mh-intf: _MH_INTF_" >> /mnt/prov.ini
+            echo "ar-intf: _AR_INTF_" >> /mnt/prov.ini
+            echo "fh-pci-addrs: 04:00.0" >> /mnt/prov.ini
+            echo "fh-vlan-id: 1" >> /mnt/prov.ini
+            echo "fh-nics: 00:a0:a5:c5:64:98" >> /mnt/prov.ini
+            echo "vcu-fqdn: 127.0.0.1" >> /mnt/prov.ini
+            echo "dep-type: cudu" >> /mnt/prov.ini
+
+          params:
+            _MGMT_INTF_: {get_param: mgmt_intf}
+            _MH_INTF_: {get_param: mh_intf}
+            _AR_INTF_: {get_param: ar_intf}
+
+  CustomExtraDeployments:
+    type: OS::Heat::SoftwareDeploymentGroup
+    properties:
+      servers:  {get_param: servers}
+      config: {get_resource: CustomExtraConfig}
+      actions: ['CREATE','UPDATE']
+      input_values:
+        deploy_identifier: {get_param: DeployIdentifier}
+

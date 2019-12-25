@@ -1,0 +1,437 @@
+    # Note the indentation here is required as it's joined
+    # to create a playbook in deploy-steps.j2
+
+    # Identify if we are bootstrap node of this role
+    # We expect hieradata was already written in pre_deployments
+    - name: get bootstrap nodeid
+      tags: common
+      command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
+      register: bootstrap_node
+    - name: set is_bootstrap_node fact
+      tags: common
+      set_fact:
+        is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
+
+    ##################################################
+    # Step 1 block, write data for subsequent steps
+    ##################################################
+
+    - name: Write config data at the start of step 1
+      when: step == "1"
+      become: true
+      block:
+        - name: Create and ensure setype for /var/log/containers directory
+          file:
+            path: /var/log/containers
+            state: directory
+            setype: var_log_t
+            selevel: s0
+          tags:
+            - host_config
+            - container_config
+            - container_config_tasks
+            - container_config_scripts
+            - container_startup_configs
+
+        - name: Create /var/lib/tripleo-config directory
+          file: path=/var/lib/tripleo-config state=directory setype=svirt_sandbox_file_t selevel=s0 recurse=true
+          tags:
+            - host_config
+            - container_config
+            - container_config_tasks
+            - container_config_scripts
+            - container_startup_configs
+
+        # Puppet manifest for baremetal host configuration
+        - name: Check if puppet step_config.pp manifest exists
+          delegate_to: localhost
+          become: false
+          stat:
+            path: "{{ tripleo_role_name + '/step_config.pp' }}"
+          register: stat_step_config
+          tags:
+            - host_config
+
+        - name: Set fact when file existed
+          no_log: True
+          set_fact:
+            role_data_step_config: "{{lookup('file', tripleo_role_name + '/step_config.pp')}}"
+          when: stat_step_config.stat.exists
+          tags:
+            - host_config
+
+        - name: Write the puppet step_config manifest
+          copy: content="{{role_data_step_config}}" dest=/var/lib/tripleo-config/puppet_step_config.pp force=yes mode=0600
+          tags:
+            - host_config
+
+        # Config file for our docker-puppet.py script, used to generate container configs
+        - name: Create /var/lib/docker-puppet
+          file: path=/var/lib/docker-puppet state=directory setype=svirt_sandbox_file_t selevel=s0 recurse=true
+          tags:
+            - container_config
+
+        - name: Check if docker-puppet puppet_config.yaml configuration file exists
+          delegate_to: localhost
+          become: false
+          stat:
+            path: "{{ tripleo_role_name + '/puppet_config.yaml' }}"
+          register: stat_puppet_config
+          tags:
+            - container_config
+
+        - name: Set fact when file existed
+          no_log: True
+          set_fact:
+            role_data_puppet_config: "{{lookup('file', tripleo_role_name + '/puppet_config.yaml') | from_yaml | to_json}}"
+          when: stat_puppet_config.stat.exists
+          tags:
+            - container_config
+
+        - name: Write docker-puppet.json file
+          copy: content="{{role_data_puppet_config}}" dest=/var/lib/docker-puppet/docker-puppet.json force=yes mode=0600
+          tags:
+            - container_config
+
+        - name: Create /var/lib/docker-config-scripts
+          file: path=/var/lib/docker-config-scripts state=directory
+          tags:
+            - container_config_scripts
+
+        # The container config files
+        # /var/lib/docker-container-startup-configs.json is removed as we now write
+        # per-step files instead
+        - name: Clean old /var/lib/docker-container-startup-configs.json file
+          file:
+            path: /var/lib/docker-container-startup-configs.json
+            state: absent
+          tags:
+            - container_startup_configs
+
+        - name: Check if docker_config_scripts.yaml file exists
+          delegate_to: localhost
+          become: false
+          stat:
+            path: "{{ tripleo_role_name + '/docker_config_scripts.yaml' }}"
+          register: stat_docker_config_scripts
+          tags:
+            - container_config_scripts
+
+        - name: Set fact when file existed
+          no_log: True
+          set_fact:
+            role_data_docker_config_scripts: "{{lookup('file', tripleo_role_name + '/docker_config_scripts.yaml') | from_yaml}}"
+          when: stat_docker_config_scripts.stat.exists
+          tags:
+            - container_config_scripts
+
+        - name: Write docker config scripts
+          copy: content="{{ item[1].content }}" dest="/var/lib/docker-config-scripts/{{ item[0] }}" force=yes mode="{{ item[1].mode | default('0600', true) }}"
+          loop: "{{ role_data_docker_config_scripts | dictsort }}"
+          loop_control:
+            label: "{{ item[0] }}"
+          tags:
+            - container_config_scripts
+
+        # Here we are dumping all the docker container startup configuration data
+        # so that we can have access to how they are started outside of heat
+        # and docker-cmd.  This lets us create command line tools to test containers.
+        # FIXME We need to update the defaults e.g in docker-toool so we can remove the
+        # docker-container-startup-configs.json and use per-step configs instead
+        - name: Set docker_config_default fact
+          no_log: True
+          set_fact:
+            docker_config_default: "{{ docker_config_default|default({}) | combine( {'step_'+item: {}} ) }}"
+          with_sequence: count={{deploy_steps_max}}
+          tags:
+            - container_startup_configs
+
+        - name: Check if docker_config.yaml file exists
+          delegate_to: localhost
+          become: false
+          stat:
+            path: "{{ tripleo_role_name + '/docker_config.yaml' }}"
+          register: stat_docker_config
+          tags:
+            - container_startup_configs
+
+        - name: Set fact when file existed
+          no_log: True
+          set_fact:
+            role_data_docker_config: "{{lookup('file', tripleo_role_name + '/docker_config.yaml') | from_yaml}}"
+          when: stat_docker_config.stat.exists
+          tags:
+            - container_startup_configs
+
+        - name: Set docker_startup_configs_with_default fact
+          no_log: True
+          set_fact:
+            docker_config_with_default: "{{docker_config_default | combine(role_data_docker_config)}}"
+          tags:
+            - container_startup_configs
+
+        - name: Write docker-container-startup-configs
+          copy: content="{{docker_config_with_default | to_json }}" dest=/var/lib/docker-container-startup-configs.json force=yes mode=0600
+          tags:
+            - container_startup_configs
+
+        - name: Write per-step docker-container-startup-configs
+          copy: content="{{ item[1] | to_json }}" dest="/var/lib/tripleo-config/docker-container-startup-config-{{ item[0] }}.json" force=yes mode=0600
+          loop: "{{ docker_config_with_default | dictsort }}"
+          loop_control:
+            label: "{{ item[0] }}"
+          tags:
+            - container_startup_configs
+
+        - name: Create /var/lib/kolla/config_files directory
+          file: path=/var/lib/kolla/config_files state=directory setype=svirt_sandbox_file_t selevel=s0 recurse=true
+          tags:
+            - container_startup_configs
+
+        - name: Check if kolla_config.yaml file exists
+          delegate_to: localhost
+          become: false
+          stat:
+            path: "{{ tripleo_role_name + '/kolla_config.yaml' }}"
+          register: stat_kolla_config
+          tags:
+            - container_startup_configs
+
+        - name: Set fact when file existed
+          no_log: True
+          set_fact:
+            role_data_kolla_config: "{{lookup('file', tripleo_role_name + '/kolla_config.yaml') | from_yaml}}"
+          when: stat_kolla_config.stat.exists
+          tags:
+            - container_startup_configs
+
+        - name: Write kolla config json files
+          copy: content="{{ item[1] | to_json }}" dest="{{ item[0] }}" force=yes mode=0600
+          loop: "{{ role_data_kolla_config | dictsort }}"
+          loop_control:
+            label: "{{ item[0] }}"
+          tags:
+            - container_startup_configs
+
+        ###############################################################
+        # Bootstrap tasks, only performed on bootstrap node of the role
+        ###############################################################
+
+        - name: Clean /var/lib/docker-puppet/docker-puppet-tasks*.json files
+          file:
+            path: "{{item}}"
+            state: absent
+          with_fileglob:
+            - /var/lib/docker-puppet/docker-puppet-tasks*.json
+          when: is_bootstrap_node|bool
+          tags:
+            - container_config_tasks
+
+        - name: Check if docker_puppet_tasks.yaml file exists
+          delegate_to: localhost
+          become: false
+          stat:
+            path: "{{ tripleo_role_name + '/docker_puppet_tasks.yaml' }}"
+          register: stat_docker_puppet_tasks
+          tags:
+            - container_config_tasks
+
+        - name: Set fact when file existed
+          no_log: True
+          set_fact:
+            role_data_docker_puppet_tasks: "{{lookup('file', tripleo_role_name + '/docker_puppet_tasks.yaml') | from_yaml}}"
+          when: stat_docker_puppet_tasks.stat.exists
+          tags:
+            - container_config_tasks
+
+        - name: Write docker-puppet-tasks json files
+          copy: content="{{ item[1] | to_json }}" dest=/var/lib/docker-puppet/docker-puppet-tasks{{ item[0].replace("step_", "") }}.json force=yes mode=0600
+          loop: "{{ role_data_docker_puppet_tasks | dictsort }}"
+          loop_control:
+            label: "{{ item[0] }}"
+          when: is_bootstrap_node|bool
+          tags:
+            - container_config_tasks
+
+    #####################################################
+    # Per step puppet configuration of the baremetal host
+    #####################################################
+
+    - name: Set host puppet debugging fact string
+      set_fact:
+        host_puppet_config_debug: "--debug --verbose"
+      when: enable_debug|default(false)|bool
+      tags:
+        - host_config
+
+    - name: Write the config_step hieradata
+      copy: content="{{dict(step=step|int)|to_json}}" dest=/etc/puppet/hieradata/config_step.json force=true mode=0600
+      become: true
+      tags:
+        - host_config
+
+    - name: Run puppet host configuration for step {{step}}
+      command: >-
+        puppet apply {{ host_puppet_config_debug|default('') }}
+        --modulepath=/etc/puppet/modules:/opt/stack/puppet-modules:/usr/share/openstack-puppet/modules
+        --detailed-exitcodes
+        --summarize
+        --logdest syslog --logdest console --color=false
+        /var/lib/tripleo-config/puppet_step_config.pp
+      changed_when: outputs.rc == 2
+      check_mode: no
+      register: outputs
+      failed_when: false
+      no_log: true
+      become: true
+      tags:
+        - host_config
+
+    - name: "Debug output for task: Run puppet host configuration for step {{ step }}"
+      debug: var=outputs.stdout_lines|default([])|union(outputs.stderr_lines|default([]))
+      when: outputs.rc is defined
+      failed_when: outputs.rc not in [0, 2]
+      tags:
+        - host_config
+
+    #########################################
+    # Pre-cache facts for container-puppet.py
+    #########################################
+    # We don't want the pre-cache tasks to be skipped in dry-run so we force
+    # check_mode to "no".
+    # https://bugzilla.redhat.com/show_bug.cgi?id=1738529
+    - name: Pre-cache facts for container-puppet.py
+      check_mode: no
+      tags:
+        - container_config
+        - container_config_tasks
+      block:
+        - name: Create puppet caching structures
+          file:
+            path: /var/lib/container-puppet/puppetlabs
+            state: directory
+            setype: svirt_sandbox_file_t
+            selevel: s0
+            recurse: True
+        - name: Write facter cache config
+          copy:
+            dest: /var/lib/container-puppet/puppetlabs/facter.conf
+            content: |
+              facts : {
+                ttls: [
+                  { "kernel" : 8 hour },
+                  { "memory" : 8 hour },
+                  { "networking" : 8 hour },
+                  { "operating system" : 8 hour },
+                  { "processor" : 8 hour },
+                ]
+              }
+            setype: svirt_sandbox_file_t
+            selevel: s0
+        - name: Cleanup facter cache if exists
+          file:
+            path: /opt/puppetlabs/facter
+            state: absent
+          ignore_errors: True
+        - name: Pre-cache facts
+          command: facter --config /var/lib/container-puppet/puppetlabs/facter.conf
+          no_log: True
+          ignore_errors: True
+        - name: Sync cached facts
+          synchronize:
+            src: /opt/puppetlabs/
+            dest: /var/lib/container-puppet/puppetlabs/
+          delegate_to: "{{ inventory_hostname }}"
+
+    ######################################
+    # Generate config via docker-puppet.py
+    ######################################
+
+    - name: Run docker-puppet tasks (generate config) during step {{step}}
+      shell: python /var/lib/docker-puppet/docker-puppet.py
+      environment:
+        NET_HOST: 'true'
+        DEBUG: '{{docker_puppet_debug|default(false)}}'
+        PROCESS_COUNT: '{{docker_puppet_process_count|default(3)}}'
+      when: step == "1"
+      changed_when: false
+      check_mode: no
+      register: outputs
+      failed_when: false
+      no_log: true
+      become: true
+      tags:
+        - container_config
+
+    - name: "Debug output for task: Run docker-puppet tasks (generate config) during step {{ step }}"
+      debug: var=outputs.stdout_lines|default([])|union(outputs.stderr_lines|default([]))
+      when: outputs.rc is defined
+      failed_when: outputs.rc != 0
+      tags:
+        - container_config
+
+    ##################################################
+    # Per step starting of the containers using paunch
+    ##################################################
+
+    # Note docker-puppet.py generates the hashed-*.json file, which is a copy of
+    # the *step_n.json with a hash of the generated external config added
+    # This acts as a salt to enable restarting the container if config changes
+    - name: Start containers for step {{step}}
+      environment:
+        TRIPLEO_MINOR_UPDATE: '{{ tripleo_minor_update | default(false) }}'
+      command: >-
+        paunch --debug apply
+        --file /var/lib/tripleo-config/hashed-docker-container-startup-config-step_{{step}}.json
+        --config-id tripleo_step{{step}} --managed-by tripleo-{{tripleo_role_name}}
+      changed_when: false
+      check_mode: no
+      register: outputs
+      failed_when: false
+      no_log: true
+      become: true
+      tags:
+        - container_startup_configs
+
+    - name: "Debug output for task: Start containers for step {{ step }}"
+      debug: var=outputs.stdout_lines|default([])|union(outputs.stderr_lines|default([]))
+      when: outputs.rc is defined
+      failed_when: outputs.rc != 0
+      tags:
+        - container_startup_configs
+
+    ###############################################################
+    # Bootstrap tasks, only performed on bootstrap node of the role
+    ###############################################################
+
+    - name: Check if /var/lib/docker-puppet/docker-puppet-tasks{{step}}.json exists
+      stat:
+        path: /var/lib/docker-puppet/docker-puppet-tasks{{step}}.json
+      register: docker_puppet_tasks_json
+      become: true
+      tags:
+        - container_config_tasks
+
+    - name: Run docker-puppet tasks (bootstrap tasks) for step {{step}}
+      shell: python /var/lib/docker-puppet/docker-puppet.py
+      environment:
+        CONFIG: /var/lib/docker-puppet/docker-puppet-tasks{{step}}.json
+        NET_HOST: "true"
+        NO_ARCHIVE: "true"
+        STEP: "{{step}}"
+      when: is_bootstrap_node|bool and docker_puppet_tasks_json.stat.exists
+      changed_when: false
+      check_mode: no
+      register: outputs
+      failed_when: false
+      no_log: true
+      become: true
+      tags:
+        - container_config_tasks
+
+    - name: "Debug output for task: Run docker-puppet tasks (bootstrap tasks) for step {{ step }}"
+      debug: var=outputs.stdout_lines|default([])|union(outputs.stderr_lines|default([]))
+      when: outputs.rc is defined
+      failed_when: outputs.rc != 0
+      tags:
+        - container_config_tasks
