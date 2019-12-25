@@ -104,14 +104,7 @@ outputs:
             privileged: true
             restart: always
             healthcheck:
-              test:
-                list_join:
-                  - ' '
-                  - - '/openstack/healthcheck'
-                    - yaql:
-                        expression: str($.data.port)
-                        data:
-                          port: {get_attr: [NeutronMetadataBase, role_data, config_settings, 'neutron::rabbit_port']}
+              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -143,6 +136,10 @@ outputs:
             - name: Set fact neutron_metadata_agent_enabled
               set_fact:
                 neutron_metadata_agent_enabled: "{{ neutron_metadata_agent_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service neutron-metadata-agent is running"
+              command: systemctl is-active --quiet neutron-metadata-agent
+              when: neutron_metadata_agent_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable neutron_metadata service

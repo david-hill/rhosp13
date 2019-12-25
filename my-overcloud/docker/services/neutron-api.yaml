@@ -141,6 +141,7 @@ outputs:
                 -
                   - /var/lib/config-data/neutron/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
                   - /var/lib/config-data/neutron/etc/neutron:/etc/neutron:ro
+                  - /var/lib/config-data/neutron/usr/share/neutron:/usr/share/neutron:ro
             command: ['/usr/bin/bootstrap_host_exec', 'neutron_api', 'neutron-db-manage', 'upgrade', 'heads']
             # FIXME: we should make config file permissions right
             # and run as neutron user
@@ -198,6 +199,10 @@ outputs:
             - name: Set fact neutron_server_enabled
               set_fact:
                 neutron_server_enabled: "{{ neutron_server_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service neutron-server is running"
+              command: systemctl is-active --quiet neutron-server
+              when: neutron_server_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable neutron_api service
@@ -234,12 +239,6 @@ outputs:
             - step|int == 1
             - release == 'ocata'
             - neutron_server_enabled|bool
-          # rhbz#1653727
-        - name: Remove python-neutron-tests when possible
-          yum: name=python-neutron-tests state=absent
-          when:
-            - step|int == 6
-            - release == 'ocata'
         - name: Neutron package update
           shell: yum -y update openstack-neutron*
           when:
@@ -247,12 +246,6 @@ outputs:
             - is_bootstrap_node|bool
         - name: Neutron package update workaround
           yum: name=python-networking-odl state=latest
-          when:
-            - step|int == 6
-            - is_bootstrap_node|bool
-        - name: Networking cisco db sync workaround
-          ignore_errors: True
-          yum: name=python-networking-cisco state=latest
           when:
             - step|int == 6
             - is_bootstrap_node|bool

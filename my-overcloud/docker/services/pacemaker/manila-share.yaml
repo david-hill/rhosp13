@@ -40,6 +40,11 @@ parameters:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
+  PcmkConfigRestartTimeout:
+    default: 600
+    description: Time in seconds to wait for a pcmk resource to restart when
+                 a config change is detected and the resource is being restarted
+    type: number
   DeployIdentifier:
     default: ''
     type: string
@@ -143,8 +148,7 @@ outputs:
               - /etc/localtime:/etc/localtime:ro
               - /dev/shm:/dev/shm:rw
               - /etc/sysconfig/docker:/etc/sysconfig/docker:ro
-              - /usr/bin/docker:/usr/bin/docker:ro
-              - /usr/bin/docker-current:/usr/bin/docker-current:ro
+              - /usr/bin:/usr/bin:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
         step_3:
           manila_share_init_logs:
@@ -162,14 +166,22 @@ outputs:
             detach: false
             net: host
             user: root
-            environment:
-              - TRIPLEO_MINOR_UPDATE
-            command: /pacemaker_restart_bundle.sh openstack-manila-share manila_share
+            command:
+              - '/usr/bin/bootstrap_host_exec'
+              - 'manila_share'
+              - str_replace:
+                  template:
+                    'if /usr/sbin/pcs resource show openstack-manila-share; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT openstack-manila-share; echo "openstack-manila-share restart invoked"; fi'
+                  params:
+                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
             image: {get_param: DockerManilaShareImage}
             volumes:
               list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - - /var/lib/config-data/puppet-generated/manila/:/var/lib/kolla/config_files/src:ro
+                - {get_attr: [ContainersCommon, volumes]}
+                -
+                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
+                  - /dev/shm:/dev/shm:rw
+                  - /var/lib/config-data/puppet-generated/manila/:/var/lib/kolla/config_files/src:ro
           manila_share_init_bundle:
             start_order: 1
             detach: false
@@ -201,13 +213,11 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
-            setype: "{{ item.setype }}"
+            path: "{{ item }}"
             state: directory
           with_items:
-            - { 'path': /var/log/containers/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/manila, 'setype': svirt_sandbox_file_t }
+            - /var/log/containers/manila
+            - /var/lib/manila
         - name: manila logs readme
           copy:
             dest: /var/log/manila/readme.txt
@@ -279,8 +289,12 @@ outputs:
               ignore_errors: true
               register: manila_share_pcs_res_result
             - name: Set fact manila_share_pcs_res
-              set_fact:
-                manila_share_pcs_res: "{{manila_share_pcs_res_result|succeeded}}"
+              set_fact: "{{manila_share_pcs_res_result|succeeded}}"
+        - name: Manila-Share baremetal to container upgrade tasks
+          when:
+            - step|int == 1
+            - not manila_share_containerized|bool
+          block:
             - name: get bootstrap nodeid
               tags: common
               command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
@@ -288,11 +302,6 @@ outputs:
             - name: set is_bootstrap_node fact
               tags: common
               set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
-        - name: Manila-Share baremetal to container upgrade tasks
-          when:
-            - step|int == 1
-            - not manila_share_containerized|bool
-          block:
             - name: Check cluster resource status
               pacemaker_resource:
                 resource: openstack-manila-share

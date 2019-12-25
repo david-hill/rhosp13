@@ -102,14 +102,7 @@ outputs:
             privileged: false
             restart: always
             healthcheck:
-              test:
-                list_join:
-                  - ' '
-                  - - '/openstack/healthcheck'
-                    - yaql:
-                        expression: str($.data.port)
-                        data:
-                          port: {get_attr: [SaharaEnginePuppetBase, role_data, config_settings, 'sahara::rabbit_port']}
+              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -121,15 +114,14 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent directories
+        - name: create /var/lib/sahara
           file:
-            path: "{{ item.path }}"
+            path: /var/lib/sahara
             state: directory
-            setype: "{{ item.setype }}"
-          with_items:
-            - { 'path': /var/log/containers/sahara, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/sahara, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/sahara, 'setype': svirt_sandbox_file_t }
+        - name: create persistent sahara logs directory
+          file:
+            path: /var/log/containers/sahara
+            state: directory
         - name: sahara logs readme
           copy:
             dest: /var/log/sahara/readme.txt
@@ -148,6 +140,10 @@ outputs:
             - name: Set fact sahara_engine_enabled
               set_fact:
                 sahara_engine_enabled: "{{ sahara_engine_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service openstack-sahara-engine is running"
+              command: systemctl is-active --quiet openstack-sahara-engine
+              when: sahara_engine_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable sahara_engine service

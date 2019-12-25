@@ -153,15 +153,13 @@ outputs:
             - /var/lib/config-data/puppet-generated/opendaylight/opt/opendaylight/etc/opendaylight/karaf
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
+            path: "{{ item }}"
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/lib/opendaylight/snapshots, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/opendaylight/journal, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/opendaylight/data, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/opendaylight, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/opendaylight/karaf/logs, 'setype': svirt_sandbox_file_t }
+            - /var/lib/opendaylight/snapshots
+            - /var/lib/opendaylight/journal
+            - /var/log/opendaylight
+            - /var/log/containers/opendaylight/karaf/logs
         - name: opendaylight logs readme
           copy:
             dest: /var/log/opendaylight/readme.txt
@@ -179,6 +177,10 @@ outputs:
             - name: Set fact opendaylight_enabled
               set_fact:
                 opendaylight_enabled: "{{ opendaylight_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service opendaylight is running"
+              command: systemctl is-active --quiet opendaylight
+              when: opendaylight_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable opendaylight_api service

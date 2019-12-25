@@ -187,16 +187,13 @@ outputs:
                       - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
                 - {}
       host_prep_tasks:
-        - name: create persistent directories
+        - name: create persistent log directories
           file:
-            path: "{{ item.path }}"
+            path: /var/log/containers/{{ item }}
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/log/containers/ec2_api, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/ec2_api_metadata, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ec2_api, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ec2_api_metadata, 'setype': svirt_sandbox_file_t }
+            - ec2_api
+            - ec2_api_metadata
         - name: ec2_api logs readme
           copy:
             dest: /var/log/{{ item }}/readme.txt
@@ -225,6 +222,14 @@ outputs:
             - name: Set fact ec2_api_metadata_enabled
               set_fact:
                 ec2_api_metadata_enabled: "{{ ec2_api_metadata_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check if openstack-ec2-api is running"
+              command: systemctl is-active --quiet openstack-ec2-api
+              when: ec2_api_enabled|bool
+              tags: validation
+            - name: "PreUpgrade step0,validation: Check if openstack-ec2-metadata-api is running"
+              command: systemctl is-active --quiet openstack-ec2-api-metadata
+              when: ec2_api_metadata_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable EC2-API service

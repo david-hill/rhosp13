@@ -10,10 +10,6 @@ parameters:
   DockerNeutronConfigImage:
     description: The container image to use for the neutron config_volume
     type: string
-  DockerSRIOVUlimit:
-    default: ['nofile=16384']
-    description: ulimit for SR-IOV Container
-    type: comma_delimited_list
   ServiceData:
     default: {}
     description: Dictionary packing service data
@@ -101,7 +97,6 @@ outputs:
             pid: host
             privileged: true
             restart: always
-            ulimit: {get_param: DockerSRIOVUlimit}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -128,6 +123,10 @@ outputs:
             - name: Set fact neutron_sriov_nic_agent_enabled
               set_fact:
                 neutron_sriov_nic_agent_enabled: "{{ neutron_sriov_nic_agent_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service neutron-sriov-nic-agent is running"
+              command: systemctl is-active --quiet neutron-sriov-nic-agent
+              when: neutron_sriov_nic_agent_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable neutron_sriov_agent service

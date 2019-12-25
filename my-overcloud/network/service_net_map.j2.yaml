@@ -42,7 +42,6 @@ parameters:
       KeystoneAdminApiNetwork: ctlplane # allows undercloud to config endpoints
       KeystonePublicApiNetwork: internal_api
       ManilaApiNetwork: internal_api
-      MetricsQdrNetwork: internal_api
       NeutronApiNetwork: internal_api
       OctaviaApiNetwork: internal_api
       HeatApiNetwork: internal_api
@@ -81,8 +80,6 @@ parameters:
       # for backwards compatibility, all other roles default to internal_api
       CephStorageHostnameResolveNetwork: storage
       EtcdNetwork: internal_api
-      # HaproxyNetwork currently only controls the haproxy.stats network binding
-      HaproxyNetwork: ctlplane
 {% for role in roles if role.name != 'CephStorage' %}
       {{role.name}}HostnameResolveNetwork: internal_api
 {% endfor %}

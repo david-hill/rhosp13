@@ -8,7 +8,6 @@
     - InternalApi
     - Storage
   HostnameFormatDefault: '%stackname%-novacontrol-%index%'
-  update_serial: 25
   ServicesDefault:
     - OS::TripleO::Services::AuditD
     - OS::TripleO::Services::CACerts
@@ -16,11 +15,9 @@
     - OS::TripleO::Services::Collectd
     - OS::TripleO::Services::Docker
     - OS::TripleO::Services::Fluentd
-    - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Kernel
     - OS::TripleO::Services::LoginDefs
-    - OS::TripleO::Services::MetricsQdr
     - OS::TripleO::Services::MySQLClient
     - OS::TripleO::Services::NovaApi
     - OS::TripleO::Services::NovaConductor

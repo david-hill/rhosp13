@@ -11,7 +11,7 @@ parameters:
     description: The container image to use for the neutron config_volume
     type: string
   DockerNeutronL3AgentUlimit:
-    default: ['nofile=16384']
+    default: ['nofile=1024']
     description: ulimit for Neutron L3 Agent Container
     type: comma_delimited_list
   NeutronEnableKeepalivedWrapper:
@@ -172,14 +172,7 @@ outputs:
             privileged: true
             restart: always
             healthcheck:
-              test:
-                list_join:
-                  - ' '
-                  - - '/openstack/healthcheck'
-                    - yaql:
-                        expression: str($.data.port)
-                        data:
-                          port: {get_attr: [NeutronL3Base, role_data, config_settings, 'neutron::rabbit_port']}
+              test: /openstack/healthcheck
             ulimit: {get_param: DockerNeutronL3AgentUlimit}
             volumes:
               list_concat:
@@ -220,14 +213,6 @@ outputs:
       host_prep_tasks:
         list_concat:
           - {get_attr: [NeutronLogging, host_prep_tasks]}
-          - - name: create /run/netns with temp namespace
-              command: ip netns add ns_temp
-              register: ipnetns_add_result
-              ignore_errors: True
-          - - name: remove temp namespace
-              command: ip netns delete ns_temp
-              ignore_errors: True
-              when: ipnetns_add_result.rc == 0
           - - name: create /var/lib/neutron
               file:
                 path: /var/lib/neutron
@@ -243,6 +228,10 @@ outputs:
             - name: Set fact neutron_l3_agent_enabled
               set_fact:
                 neutron_l3_agent_enabled: "{{ neutron_l3_agent_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service neutron-l3-agent is running"
+              command: systemctl is-active --quiet neutron-l3-agent
+              when: neutron_l3_agent_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable neutron_l3 service

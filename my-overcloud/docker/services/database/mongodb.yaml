@@ -150,13 +150,11 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
+            path: "{{ item }}"
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/log/mongodb, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/mongodb, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/mongodb, 'setype': svirt_sandbox_file_t }
+            - /var/log/containers/mongodb
+            - /var/lib/mongodb
         - name: mongodb logs readme
           copy:
             dest: /var/log/mongodb/readme.txt
@@ -177,6 +175,10 @@ outputs:
             - name: Set fact mongod_enabled
               set_fact:
                 mongod_enabled: "{{ mongod_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check if mongod is running"
+              command: systemctl is-active --quiet mongod
+              when: mongod_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable mongodb service

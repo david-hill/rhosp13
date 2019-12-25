@@ -52,6 +52,11 @@ parameters:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
+  PcmkConfigRestartTimeout:
+    default: 600
+    description: Time in seconds to wait for a pcmk resource to restart when
+                 a config change is detected and the resource is being restarted
+    type: number
   DeployIdentifier:
     default: ''
     type: string
@@ -164,8 +169,7 @@ outputs:
               - /etc/localtime:/etc/localtime:ro
               - /dev/shm:/dev/shm:rw
               - /etc/sysconfig/docker:/etc/sysconfig/docker:ro
-              - /usr/bin/docker:/usr/bin/docker:ro
-              - /usr/bin/docker-current:/usr/bin/docker-current:ro
+              - /usr/bin:/usr/bin:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
         step_3:
           cinder_backup_init_logs:
@@ -183,14 +187,22 @@ outputs:
             detach: false
             net: host
             user: root
-            environment:
-              - TRIPLEO_MINOR_UPDATE
-            command: /pacemaker_restart_bundle.sh openstack-cinder-backup cinder_backup
+            command:
+              - '/usr/bin/bootstrap_host_exec'
+              - 'cinder_backup'
+              - str_replace:
+                  template:
+                    'if /usr/sbin/pcs resource show openstack-cinder-backup; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT openstack-cinder-backup; echo "openstack-cinder-backup restart invoked"; fi'
+                  params:
+                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
             image: {get_param: DockerCinderBackupImage}
             volumes:
               list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
+                - {get_attr: [ContainersCommon, volumes]}
+                -
+                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
+                  - /dev/shm:/dev/shm:rw
+                  - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
           cinder_backup_init_bundle:
             start_order: 1
             detach: false
@@ -222,13 +234,11 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
+            path: "{{ item }}"
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/log/containers/cinder, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/cinder, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/cinder, 'setype': svirt_sandbox_file_t }
+            - /var/lib/cinder
+            - /var/log/containers/cinder
         - name: cinder logs readme
           copy:
             dest: /var/log/cinder/readme.txt
@@ -303,6 +313,11 @@ outputs:
             - name: Set fact cinder_backup_pcs_res
               set_fact:
                 cinder_backup_pcs_res: "{{cinder_backup_pcs_res_result|succeeded}}"
+        - name: Cinder-Backup baremetal to container upgrade tasks
+          when:
+            - step|int == 1
+            - not cinder_backup_containerized|bool
+          block:
             - name: get bootstrap nodeid
               tags: common
               command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
@@ -310,11 +325,6 @@ outputs:
             - name: set is_bootstrap_node fact
               tags: common
               set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
-        - name: Cinder-Backup baremetal to container upgrade tasks
-          when:
-            - step|int == 1
-            - not cinder_backup_containerized|bool
-          block:
             - name: Check cluster resource status
               pacemaker_resource:
                 resource: openstack-cinder-backup

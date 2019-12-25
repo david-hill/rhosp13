@@ -33,14 +33,10 @@ outputs:
   host_prep_tasks:
     description: Extra ansible tasks needed for logging to files in the host.
     value:
-      - name: create persistent directories
+      - name: create persistent logs directory
         file:
-          path: "{{ item.path }}"
+          path: /var/log/containers/heat
           state: directory
-          setype: "{{ item.setype }}"
-        with_items:
-          - { 'path': /var/log/containers/heat, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/heat, 'setype': svirt_sandbox_file_t }
       - name: heat logs readme
         copy:
           dest: /var/log/heat/readme.txt

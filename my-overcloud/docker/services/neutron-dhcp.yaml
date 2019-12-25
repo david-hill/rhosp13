@@ -11,7 +11,7 @@ parameters:
     description: The container image to use for the neutron config_volume
     type: string
   DockerNeutronDHCPAgentUlimit:
-    default: ['nofile=16384']
+    default: ['nofile=1024']
     description: ulimit for Neutron DHCP Agent Container
     type: comma_delimited_list
   NeutronEnableDnsmasqDockerWrapper:
@@ -93,6 +93,10 @@ outputs:
         map_merge:
           - get_attr: [NeutronBase, role_data, config_settings]
           - get_attr: [NeutronLogging, config_settings]
+          - if:
+            - internal_tls_enabled
+            - tripleo::certmonger::neutron::postsave_cmd: "true" # TODO: restart the container here
+            - {}
           - tripleo::profile::base::neutron::dhcp_agent_wrappers::enable_dnsmasq_wrapper: {get_param: NeutronEnableDnsmasqDockerWrapper}
             tripleo::profile::base::neutron::dhcp_agent_wrappers::dnsmasq_process_wrapper: '/var/lib/neutron/dnsmasq_wrapper'
             tripleo::profile::base::neutron::dhcp_agent_wrappers::dnsmasq_image: {get_param: DockerNeutronDHCPImage}
@@ -164,14 +168,7 @@ outputs:
             privileged: true
             restart: always
             healthcheck:
-              test:
-                list_join:
-                  - ' '
-                  - - '/openstack/healthcheck'
-                    - yaql:
-                        expression: str($.data.port)
-                        data:
-                          port: {get_attr: [NeutronBase, role_data, config_settings, 'neutron::rabbit_port']}
+              test: /openstack/healthcheck
             ulimit: {get_param: DockerNeutronDHCPAgentUlimit}
             volumes:
               list_concat:
@@ -209,24 +206,10 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       metadata_settings:
-        if:
-          - internal_tls_enabled
-          -
-            - service: neutron
-              network: {get_param: [ServiceNetMap, NeutronApiNetwork]}
-              type: node
-          - null
+        get_attr: [NeutronBase, role_data, metadata_settings]
       host_prep_tasks:
         list_concat:
           - {get_attr: [NeutronLogging, host_prep_tasks]}
-          - - name: create /run/netns with temp namespace
-              command: ip netns add ns_temp
-              register: ipnetns_add_result
-              ignore_errors: True
-          - - name: remove temp namespace
-              command: ip netns delete ns_temp
-              ignore_errors: True
-              when: ipnetns_add_result.rc == 0
           - - name: create /var/lib/neutron
               file:
                 path: /var/lib/neutron
@@ -242,6 +225,10 @@ outputs:
             - name: Set fact neutron_dhcp_agent_enabled
               set_fact:
                 neutron_dhcp_agent_enabled: "{{ neutron_dhcp_agent_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service neutron-dhcp-agent is running"
+              command: systemctl is-active --quiet neutron-dhcp-agent
+              when: neutron_dhcp_agent_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable neutron_dhcp service

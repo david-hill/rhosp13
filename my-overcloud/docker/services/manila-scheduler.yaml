@@ -91,14 +91,7 @@ outputs:
             net: host
             restart: always
             healthcheck:
-              test:
-                list_join:
-                  - ' '
-                  - - '/openstack/healthcheck'
-                    - yaql:
-                        expression: str($.data.port)
-                        data:
-                          port: {get_attr: [ManilaSchedulerPuppetBase, role_data, config_settings, 'manila::rabbit_port']}
+              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -109,14 +102,10 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent directories
+        - name: Create persistent manila logs directory
           file:
-            path: "{{ item.path }}"
+            path: /var/log/containers/manila
             state: directory
-            setype: "{{ item.setype }}"
-          with_items:
-            - { 'path': /var/log/containers/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/manila, 'setype': svirt_sandbox_file_t }
         - name: manila logs readme
           copy:
             dest: /var/log/manila/readme.txt
@@ -135,6 +124,10 @@ outputs:
             - name: Set fact manila_scheduler_enabled
               set_fact:
                 manila_scheduler_enabled: "{{ manila_scheduler_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service openstack-manila-scheduler is running"
+              command: systemctl is-active --quiet openstack-manila-scheduler
+              when: manila_scheduler_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable manila_scheduler service

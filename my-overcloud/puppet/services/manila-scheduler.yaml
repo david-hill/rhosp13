@@ -30,6 +30,18 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
+  NovaPassword:
+    type: string
+    description: The password for the nova service and db account
+    hidden: true
+  NeutronPassword:
+    description: The password for the neutron service and db account, used by neutron agents.
+    type: string
+    hidden: true
+  ManilaPassword:
+    description: The password for the manila service account.
+    type: string
+    hidden: true
   MonitoringSubscriptionManilaScheduler:
     default: 'overcloud-manila-scheduler'
     type: string
@@ -51,6 +63,14 @@ outputs:
     value:
       service_name: manila_scheduler
       monitoring_subscription: {get_param: MonitoringSubscriptionManilaScheduler}
-      config_settings: {get_attr: [ManilaBase, role_data, config_settings]}
+      config_settings:
+        map_merge:
+          - get_attr: [ManilaBase, role_data, config_settings]
+          - manila::compute::nova::nova_admin_auth_url: {get_param: [EndpointMap, KeystoneInternal, uri]}
+            manila::compute::nova::nova_admin_password: {get_param: NovaPassword}
+            manila::compute::nova::nova_admin_tenant_name: 'service'
+            manila::network::neutron::neutron_url: {get_param: [EndpointMap, NeutronInternal, uri]}
+            manila::network::neutron::neutron_admin_auth_url: {get_param: [EndpointMap, KeystoneInternal, uri]}
+            manila::network::neutron::neutron_admin_password: {get_param: NeutronPassword}
       step_config: |
         include ::tripleo::profile::base::manila::scheduler

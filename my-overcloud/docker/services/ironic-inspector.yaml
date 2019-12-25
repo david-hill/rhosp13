@@ -166,14 +166,10 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent directories
+        - name: create persistent ironic-inspector logs directory
           file:
-            path: "{{ item.path }}"
+            path: /var/log/containers/ironic-inspector
             state: directory
-            setype: "{{ item.setype }}"
-          with_items:
-            - { 'path': /var/log/containers/ironic-inspector, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ironic-inspector, 'setype': svirt_sandbox_file_t }
         - name: ironic-inspector logs readme
           copy:
             dest: /var/log/ironic-inspector/readme.txt
@@ -192,6 +188,10 @@ outputs:
             - name: Set fact ironic_inspector_enabled
               set_fact:
                 ironic_inspector_enabled: "{{ ironic_inspector_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service openstack-ironic-inspector is running"
+              command: systemctl is-active --quiet openstack-ironic-inspector
+              tags: validation
+              when: ironic_inspector_enabled|bool
         - when: step|int == 2
           block:
             - name: Stop and disable ironic_inspector service

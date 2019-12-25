@@ -141,26 +141,17 @@ outputs:
             privileged: true
             restart: always
             healthcheck:
-              test:
-                list_join:
-                  - ' '
-                  - - '/openstack/healthcheck'
-                    - yaql:
-                        expression: str($.data.port)
-                        data:
-                          port: {get_attr: [CinderBase, role_data, config_settings, 'cinder::rabbit_port']}
+              test: /openstack/healthcheck
             volumes: {get_attr: [CinderCommon, cinder_backup_volumes]}
             environment: {get_attr: [CinderCommon, cinder_backup_environment]}
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
+            path: "{{ item }}"
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/lib/cinder, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/cinder, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/cinder, 'setype': svirt_sandbox_file_t }
+            - /var/lib/cinder
+            - /var/log/containers/cinder
         - name: cinder logs readme
           copy:
             dest: /var/log/cinder/readme.txt
@@ -183,6 +174,10 @@ outputs:
             - name: Set fact cinder_backup_enabled
               set_fact:
                 cinder_backup_enabled: "{{ cinder_backup_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service openstack-cinder-backup is running"
+              shell: systemctl is-active --quiet openstack-cinder-backup
+              when: cinder_backup_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable cinder_backup service

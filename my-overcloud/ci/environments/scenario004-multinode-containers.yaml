@@ -96,6 +96,7 @@ parameter_defaults:
     devices:
       - /dev/loop3
     journal_size: 512
+    journal_collocation: true
     osd_scenario: collocated
   # Without MDS and RGW we create 5 pools, totalling 160 PGs at 32 PGs each
   # With MDS and RGW instead we create 9 pools, so we lower the PG size

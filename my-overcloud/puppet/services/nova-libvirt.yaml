@@ -130,17 +130,6 @@ parameters:
     description: The password for the libvirt service when TLS is enabled
     type: string
     hidden: true
-  LibvirtLogFilters:
-    description: Defines a filter to select a different logging level
-                 for a given category log outputs, as specified in
-                 https://libvirt.org/logging.html .
-    type: string
-    default: '1:libvirt 1:qemu 1:conf 1:security 3:event 3:json 3:file 3:object 1:util'
-  LibvirtTLSPriority:
-    description: >
-      Override the compile time default TLS priority string.
-    type: string
-    default: 'NORMAL:-VERS-SSL3.0:-VERS-TLS-ALL:+VERS-TLS1.2'
 
 conditions:
 
@@ -220,13 +209,7 @@ outputs:
             nova::compute::libvirt::qemu::configure_qemu: true
             nova::compute::libvirt::qemu::max_files: 32768
             nova::compute::libvirt::qemu::max_processes: 131072
-            nova::compute::libvirt::vncserver_listen:
-              str_replace:
-                 template:
-                   "%{hiera('$NETWORK')}"
-                 params:
-                   $NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
-            nova::compute::libvirt::log_filters: {get_param: LibvirtLogFilters}
+            nova::compute::libvirt::vncserver_listen: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
             nova::migration::qemu::configure_qemu: true
             nova::migration::qemu::migration_port_min: 61152
             nova::migration::qemu::migration_port_max: 61215
@@ -245,13 +228,8 @@ outputs:
                 generate_service_certificates: true
                 tripleo::profile::base::nova::migration::client::libvirt_tls: true
                 tripleo::profile::base::nova::libvirt::tls_password: {get_param: [LibvirtTLSPassword]}
-                nova::compute::libvirt::tls_priority: {get_param: LibvirtTLSPriority}
                 nova::migration::libvirt::listen_address:
-                  str_replace:
-                     template:
-                       "%{hiera('$NETWORK')}"
-                     params:
-                       $NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
+                  get_param: [ServiceNetMap, NovaLibvirtNetwork]
                 nova::migration::libvirt::live_migration_inbound_addr:
                   str_replace:
                     template:

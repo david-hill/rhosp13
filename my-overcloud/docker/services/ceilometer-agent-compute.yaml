@@ -98,14 +98,10 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent directories
+        - name: create persistent logs directory
           file:
-            path: "{{ item.path }}"
+            path: /var/log/containers/ceilometer
             state: directory
-            setype: "{{ item.setype }}"
-          with_items:
-            - { 'path': /var/log/containers/ceilometer, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ceilometer, 'setype': svirt_sandbox_file_t }
         - name: ceilometer logs readme
           copy:
             dest: /var/log/ceilometer/readme.txt
@@ -131,6 +127,14 @@ outputs:
             - name: Set fact openstack_ceilometer_polling_enabled
               set_fact:
                 openstack_ceilometer_polling_enabled: "{{ openstack_ceilometer_polling_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service openstack-ceilometer-compute is running"
+              command: systemctl is-active --quiet openstack-ceilometer-compute
+              when: openstack_ceilometer_compute_enabled|bool
+              tags: validation
+            - name: "PreUpgrade step0,validation: Check service openstack-ceilometer-polling is running"
+              command: systemctl is-active --quiet openstack-ceilometer-polling
+              when: openstack_ceilometer_polling_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable ceilometer compute agent

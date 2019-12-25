@@ -7,12 +7,6 @@ parameters:
   DockerNovaApiImage:
     description: image
     type: string
-  DeployIdentifier:
-    default: ''
-    type: string
-    description: >
-      Setting this to a unique value will re-run any deployment tasks which
-      perform configuration on a Heat stack-update.
 
 outputs:
   config_settings:
@@ -34,25 +28,16 @@ outputs:
           user: root
           volumes: *nova_api_volumes
           command: ['/bin/bash', '-c', 'chown -R nova:nova /var/log/nova']
-          environment:
-            # NOTE: this should force this container to re-run on each
-            # update (scale-out, etc.)
-            - list_join:
-                - ''
-                - - 'TRIPLEO_DEPLOY_IDENTIFIER='
-                  - {get_param: DeployIdentifier}
   host_prep_tasks:
     description: Extra ansible tasks needed for logging to files in the host.
     value:
-      - name: create persistent directories
+      - name: create persistent logs directory
         file:
-          path: "{{ item.path }}"
+          path: "{{ item }}"
           state: directory
-          setype: "{{ item.setype }}"
         with_items:
-          - { 'path': /var/log/containers/nova, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/containers/httpd/nova-api, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/nova, 'setype': svirt_sandbox_file_t }
+          - /var/log/containers/nova
+          - /var/log/containers/httpd/nova-api
       - name: nova logs readme
         copy:
           dest: /var/log/nova/readme.txt

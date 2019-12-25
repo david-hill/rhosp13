@@ -41,15 +41,13 @@ outputs:
   host_prep_tasks:
     description: Extra ansible tasks needed for logging to files in the host.
     value:
-      - name: create persistent directories
+      - name: create persistent logs directory
         file:
-          path: "{{ item.path }}"
+          path: "{{ item }}"
           state: directory
-          setype: "{{ item.setype }}"
         with_items:
-          - { 'path': /var/log/containers/neutron, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/containers/httpd/neutron-api, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/neutron, 'setype': svirt_sandbox_file_t }
+          - /var/log/containers/neutron
+          - /var/log/containers/httpd/neutron-api
       - name: neutron logs readme
         copy:
           dest: /var/log/neutron/readme.txt

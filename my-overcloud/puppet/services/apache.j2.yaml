@@ -80,27 +80,20 @@ outputs:
             # internal_api -> IP
             # internal_api_uri -> [IP]
             # internal_api_subnet - > IP/CIDR
-            apache::ip:
-              str_replace:
-                template:
-                  "%{hiera('$NETWORK')}"
-                params:
-                  $NETWORK: {get_param: [ServiceNetMap, ApacheNetwork]}
+            apache::ip: {get_param: [ServiceNetMap, ApacheNetwork]}
             apache::default_vhost: false
             apache::trace_enable: 'Off'
             apache::server_signature: 'Off'
             apache::server_tokens: 'Prod'
             apache_remote_proxy_ips_network:
               str_replace:
-                template:
-                  "%{hiera('$NETWORK_subnet')}"
+                template: "NETWORK_subnet"
                 params:
-                  $NETWORK: {get_param: [ServiceNetMap, ApacheNetwork]}
+                  NETWORK: {get_param: [ServiceNetMap, ApacheNetwork]}
             apache::mod::prefork::maxclients: { get_param: ApacheMaxRequestWorkers }
             apache::mod::prefork::serverlimit: { get_param: ApacheServerLimit }
             apache::mod::remoteip::proxy_ips:
               - "%{hiera('apache_remote_proxy_ips_network')}"
-            apache::mod::alias::icons_options: 'None'
           - if:
             - internal_tls_enabled
             -
@@ -118,7 +111,6 @@ outputs:
                         service_key: '/etc/pki/tls/private/httpd/httpd-NETWORK.key'
                         hostname: "%{hiera('fqdn_NETWORK')}"
                         principal: "HTTP/%{hiera('fqdn_NETWORK')}"
-                        postsave_cmd: "pkill -USR1 httpd"
                     for_each:
                       NETWORK: {get_attr: [ApacheNetworks, value]}
             - {}

@@ -77,15 +77,10 @@ parameters:
     type: string
     description: Specifies the default CA cert to use if TLS is used for
                  services in the internal network.
-  NeutronDhcpOvsIntegrationBridge:
-    default: ''
-    type: string
-    description: Name of Open vSwitch bridge to use
 
 conditions:
   service_debug_unset: {equals: [{get_param: NeutronDhcpAgentDebug}, '']}
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-  dhcp_ovs_intergation_bridge_unset: {equals: [{get_param: NeutronDhcpOvsIntegrationBridge}, '']}
 
 resources:
 
@@ -131,26 +126,7 @@ outputs:
               - neutron::agents::dhcp::ovsdb_agent_ssl_key_file: '/etc/pki/tls/private/neutron.key'
                 neutron::agents::dhcp::ovsdb_agent_ssl_cert_file: '/etc/pki/tls/certs/neutron.crt'
                 neutron::agents::dhcp::ovsdb_agent_ssl_ca_file: {get_param: InternalTLSCAFile}
-                generate_service_certificates: true
-                tripleo::profile::base::neutron::certificate_specs:
-                  service_certificate: '/etc/pki/tls/certs/neutron.crt'
-                  service_key: '/etc/pki/tls/private/neutron.key'
-                  hostname:
-                    str_replace:
-                      template: "%{hiera('fqdn_NETWORK')}"
-                      params:
-                        NETWORK: {get_param: [ServiceNetMap, NeutronApiNetwork]}
-                  principal:
-                    str_replace:
-                      template: "neutron/%{hiera('fqdn_NETWORK')}"
-                      params:
-                        NETWORK: {get_param: [ServiceNetMap, NeutronApiNetwork]}
-                  postsave_cmd: "/usr/bin/certmonger-neutron-dhcpd-refresh.sh"
               - {}
-          - if:
-              - dhcp_ovs_intergation_bridge_unset
-              - {}
-              - neutron::agents::dhcp::ovs_integration_bridge: {get_param: NeutronDhcpOvsIntegrationBridge}
       service_config_settings:
         fluentd:
           tripleo_fluentd_groups_neutron_dhcp:

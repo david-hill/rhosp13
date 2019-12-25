@@ -115,9 +115,6 @@ outputs:
           resource-stickiness: { value: INFINITY }
         corosync_token_timeout: 10000
         pacemaker::corosync::settle_tries: {get_param: CorosyncSettleTries}
-        pacemaker::resource::bundle::deep_compare: true
-        pacemaker::resource::ip::deep_compare: true
-        pacemaker::resource::ocf::deep_compare: true
         tripleo.pacemaker.firewall_rules:
           '130 pacemaker tcp':
             proto: 'tcp'
@@ -130,7 +127,6 @@ outputs:
             dport: 5405
         corosync_ipv6: {get_param: CorosyncIPv6}
         tripleo::fencing::config: {get_param: FencingConfig}
-        tripleo::fencing::deep_compare: true
         enable_fencing: {get_param: EnableFencing}
         hacluster_pwd:
           yaql:
@@ -167,26 +163,6 @@ outputs:
           pacemaker_cluster: state=online check_and_fail=true
           async: 30
           poll: 4
-        - name: Move virtual IPs to another node before stopping pacemaker
-          when: step|int == 1
-          shell: |
-            CLUSTER_NODE=$(crm_node -n)
-            echo "Retrieving all the VIPs which are hosted on this node"
-            VIPS_TO_MOVE=$(crm_mon --as-xml | xmllint --xpath '//resource[@resource_agent = "ocf::heartbeat:IPaddr2" and @role = "Started" and @managed = "true" and ./node[@name = "'${CLUSTER_NODE}'"]]/@id' - | sed -e 's/id=//g' -e 's/"//g')
-            for v in ${VIPS_TO_MOVE}; do
-                echo "Moving VIP $v on another node"
-                pcs resource move $v --wait=300
-            done
-            echo "Removing the location constraints that were created to move the VIPs"
-            for v in ${VIPS_TO_MOVE}; do
-                echo "Removing location ban for VIP $v"
-                ban_id=$(cibadmin --query | xmllint --xpath 'string(//rsc_location[@rsc="'${v}'" and @node="'${CLUSTER_NODE}'" and @score="-INFINITY"]/@id)' -)
-                if [ -n "$ban_id" ]; then
-                    pcs constraint remove ${ban_id}
-                else
-                    echo "Could not retrieve and clear location constraint for VIP $v" 2>&1
-                fi
-            done
         - name: Stop pacemaker cluster
           when: step|int == 1
           pacemaker_cluster: state=offline

@@ -62,10 +62,6 @@ parameters:
       Subsystem: 'sftp  /usr/libexec/openssh/sftp-server'
     description: Mapping of sshd_config values
     type: json
-  SshFirewallAllowAll:
-    default: false
-    description: Set this to true to open up ssh access from all sources.
-    type: boolean
 
 outputs:
   role_data:
@@ -73,17 +69,8 @@ outputs:
     value:
       service_name: sshd
       config_settings:
-        map_merge:
-          - tripleo::profile::base::sshd::bannertext: {get_param: BannerText}
-            tripleo::profile::base::sshd::motd: {get_param: MessageOfTheDay}
-            tripleo::profile::base::sshd::options: {get_param: SshServerOptions}
-          - if:
-            - {get_param: SshFirewallAllowAll}
-            - tripleo::sshd::firewall_rules:
-                '003 accept ssh from all':
-                  proto: 'tcp'
-                  dport: 22
-            - null
-
+        tripleo::profile::base::sshd::bannertext: {get_param: BannerText}
+        tripleo::profile::base::sshd::motd: {get_param: MessageOfTheDay}
+        tripleo::profile::base::sshd::options: {get_param: SshServerOptions}
       step_config: |
         include ::tripleo::profile::base::sshd

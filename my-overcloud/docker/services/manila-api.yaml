@@ -36,13 +36,6 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
-  EnableInternalTLS:
-    type: boolean
-    default: false
-
-conditions:
-
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
 
 resources:
 
@@ -59,18 +52,13 @@ resources:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
       DefaultPasswords: {get_param: DefaultPasswords}
-      RoleName: {get_param: RoleName}
-      RoleParameters: {get_param: RoleParameters}
 
 outputs:
   role_data:
     description: Role data for the Manila API role.
     value:
       service_name: {get_attr: [ManilaApiPuppetBase, role_data, service_name]}
-      config_settings:
-        map_merge:
-          - get_attr: [ManilaApiPuppetBase, role_data, config_settings]
-          - apache::default_vhost: false
+      config_settings: {get_attr: [ManilaApiPuppetBase, role_data, config_settings]}
       logging_source: {get_attr: [ManilaApiPuppetBase, role_data, logging_source]}
       logging_groups: {get_attr: [ManilaApiPuppetBase, role_data, logging_groups]}
       service_config_settings: {get_attr: [ManilaApiPuppetBase, role_data, service_config_settings]}
@@ -86,7 +74,7 @@ outputs:
         config_image: {get_param: DockerManilaConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/manila_api.json:
-          command: /usr/sbin/httpd -DFOREGROUND
+          command: /usr/bin/manila-api --config-file /usr/share/manila/manila-dist.conf --config-file /etc/manila/manila.conf
           config_files:
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
@@ -125,9 +113,6 @@ outputs:
             image: *manila_api_image
             net: host
             restart: always
-            # NOTE(gouthamr) kolla image sets the user to 'manila', we need it
-            # to be root to run httpd
-            user: root
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -136,28 +121,16 @@ outputs:
                   - /var/lib/config-data/puppet-generated/manila/:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/manila:/var/log/manila
                   - /var/log/containers/httpd/manila-api:/var/log/httpd
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                      - ''
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                      - ''
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: Create persistent directories
+        - name: Create persistent manila logs directory
           file:
-            path: "{{ item.path }}"
+            path: "{{ item }}"
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/log/containers/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/httpd/manila-api, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/manila, 'setype': svirt_sandbox_file_t }
+            - /var/log/containers/manila
+            - /var/log/containers/httpd/manila-api
         - name: manila logs readme
           copy:
             dest: /var/log/manila/readme.txt
@@ -176,6 +149,10 @@ outputs:
             - name: Set fact manila_api_enabled
               set_fact:
                 manila_api_enabled: "{{ manila_api_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service openstack-manila-api is running"
+              command: systemctl is-active --quiet openstack-manila-api
+              when: manila_api_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable manila_api service

@@ -123,11 +123,6 @@ parameters:
     description: >
         Cron to move deleted instances to another table - Week Day
     default: '*'
-  NovaCronDBArchivedMaxDelay:
-    type: string
-    description: >
-        Cron to move deleted instances to another table - Max Delay
-    default: '3600'
   NovaCronArchiveDeleteRowsMaxRows:
     type: string
     description: >
@@ -166,12 +161,7 @@ outputs:
       service_name: nova_base
       config_settings:
         map_merge:
-        - nova::my_ip:
-            str_replace:
-              template:
-                "%{hiera('$NETWORK')}"
-              params:
-                $NETWORK: {get_param: [ServiceNetMap, NovaApiNetwork]}
+        - nova::my_ip: {get_param: [ServiceNetMap, NovaApiNetwork]}
           nova::rabbit_password: {get_param: RabbitPassword}
           nova::rabbit_userid: {get_param: RabbitUserName}
           nova::rabbit_use_ssl: {get_param: RabbitClientUseSSL}
@@ -233,7 +223,7 @@ outputs:
           nova::network::neutron::dhcp_domain: ''
           nova::network::neutron::neutron_password: {get_param: NeutronPassword}
           nova::network::neutron::neutron_url: {get_param: [EndpointMap, NeutronInternal, uri]}
-          nova::network::neutron::neutron_auth_url: {get_param: [EndpointMap, KeystoneV3Internal, uri]}
+          nova::network::neutron::neutron_auth_url: {get_param: [EndpointMap, KeystoneV3Admin, uri]}
           nova::rabbit_heartbeat_timeout_threshold: 60
           nova::cinder_catalog_info: 'volumev3:cinderv3:internalURL'
           nova::host: "%{hiera('fqdn_canonical')}"
@@ -253,7 +243,6 @@ outputs:
           nova::cron::archive_deleted_rows::monthday: {get_param: NovaCronArchiveDeleteRowsMonthday}
           nova::cron::archive_deleted_rows::month: {get_param: NovaCronArchiveDeleteRowsMonth}
           nova::cron::archive_deleted_rows::weekday: {get_param: NovaCronArchiveDeleteRowsWeekday}
-          nova::cron::archive_deleted_rows::maxdelay: {get_param: NovaCronDBArchivedMaxDelay}
           nova::cron::archive_deleted_rows::max_rows: {get_param: NovaCronArchiveDeleteRowsMaxRows}
           nova::cron::archive_deleted_rows::user: {get_param: NovaCronArchiveDeleteRowsUser}
           nova::cron::archive_deleted_rows::destination: {get_param: NovaCronArchiveDeleteRowsDestination}

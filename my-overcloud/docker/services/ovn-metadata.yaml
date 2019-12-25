@@ -181,14 +181,6 @@ outputs:
       host_prep_tasks:
         list_concat:
           - {get_attr: [NeutronLogging, host_prep_tasks]}
-          - - name: create /run/netns with temp namespace
-              command: ip netns add ns_temp
-              register: ipnetns_add_result
-              ignore_errors: True
-          - - name: remove temp namespace
-              command: ip netns delete ns_temp
-              ignore_errors: True
-              when: ipnetns_add_result.rc == 0
           - - name: create /var/lib/neutron
               file:
                 path: /var/lib/neutron
@@ -204,6 +196,10 @@ outputs:
             - name: Set fact networking_ovn_metadata_agent_enabled
               set_fact:
                 networking_ovn_metadata_agent_enabled: "{{ networking_ovn_metadata_agent_enabled.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service networking-ovn-metadata-agent is running"
+              command: systemctl is-active --quiet networking-ovn-metadata-agent
+              when: networking_ovn_metadata_agent_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable networking_ovn_metadata service

@@ -11,7 +11,7 @@ parameters:
     description: The container image to use for the nova_libvirt config_volume
     type: string
   DockerNovaComputeUlimit:
-    default: ['nofile=131072', 'memlock=67108864']
+    default: ['nofile=1024']
     description: ulimit for Nova Compute Container
     type: comma_delimited_list
   ServiceData:
@@ -49,6 +49,10 @@ parameters:
     type: string
     description: Nova Compute upgrade level
     default: ''
+  UpgradeRemoveUnusedPackages:
+    default: false
+    description: Remove package if the service is being disabled during upgrade
+    type: boolean
   CephClientUserName:
     default: openstack
     type: string
@@ -75,12 +79,6 @@ parameters:
                  This setup requires the Compute role to have the
                  PacemakerRemote service added to it.
     type: boolean
-  DeployIdentifier:
-    default: ''
-    type: string
-    description: >
-      Setting this to a unique value will re-run any deployment tasks which
-      perform configuration on a Heat stack-update.
 
 resources:
 
@@ -124,6 +122,7 @@ outputs:
     description: Role data for the Nova Compute service.
     value:
       service_name: {get_attr: [NovaComputeBase, role_data, service_name]}
+      cellv2_discovery: true
       config_settings:
         map_merge:
           - get_attr: [NovaComputeBase, role_data, config_settings]
@@ -177,8 +176,6 @@ outputs:
               perm: '0600'
       docker_config_scripts: {get_attr: [NovaComputeCommon, docker_config_scripts]}
       docker_config:
-        step_2:
-          get_attr: [NovaLogging, docker_config, step_2]
         step_3:
           nova_statedir_owner:
             image: &nova_compute_image {get_param: DockerNovaComputeImage}
@@ -189,105 +186,39 @@ outputs:
               - /var/lib/nova:/var/lib/nova:shared
               - /var/lib/docker-config-scripts/:/docker-config-scripts/
             command: "/docker-config-scripts/nova_statedir_ownership.py"
-            environment:
-              # NOTE: this should force this container to re-run on each
-              # update (scale-out, etc.)
-              - list_join:
-                  - ''
-                  - - 'TRIPLEO_DEPLOY_IDENTIFIER='
-                    - {get_param: DeployIdentifier}
         step_4:
-          map_merge:
-            - nova_wait_for_placement_service:
-                start_order: 2
-                image: *nova_compute_image
-                user: nova
-                net: host
-                privileged: false
-                detach: false
-                volumes:
-                  - /var/lib/docker-config-scripts/:/docker-config-scripts/
-                  - /var/lib/config-data/puppet-generated/nova_libvirt/etc/nova:/etc/nova:ro
-                command: "/docker-config-scripts/nova_wait_for_placement_service.py"
-            - nova_compute:
-                start_order: 3
-                image: *nova_compute_image
-                ulimit: {get_param: DockerNovaComputeUlimit}
-                ipc: host
-                net: host
-                privileged: true
-                user: nova
-                restart: always
-                healthcheck:
-                  test:
-                    list_join:
-                      - ' '
-                      - - '/openstack/healthcheck'
-                        - yaql:
-                            expression: str($.data.port)
-                            data:
-                              port: {get_attr: [NovaComputeBase, role_data, config_settings, 'nova::rabbit_port']}
-                volumes:
-                  list_concat:
-                    - {get_attr: [ContainersCommon, volumes]}
-                    - {get_attr: [NovaLogging, volumes]}
-                    - {get_param: NovaComputeOptVolumes}
-                    -
-                      - /var/lib/kolla/config_files/nova_compute.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/nova_libvirt/:/var/lib/kolla/config_files/src:ro
-                      - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
-                      - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
-                      - /dev:/dev
-                      - /lib/modules:/lib/modules:ro
-                      - /run:/run
-                      - /var/lib/iscsi:/var/lib/iscsi
-                      - /var/lib/nova:/var/lib/nova:shared
-                      - /var/lib/libvirt:/var/lib/libvirt
-                      - /sys/class/net:/sys/class/net
-                      - /sys/bus/pci:/sys/bus/pci
-                environment:
-                  list_concat:
-                    - {get_param: NovaComputeOptEnvVars}
-                    -
-                      - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
-            - nova_wait_for_compute_service:
-                start_order: 4
-                image: *nova_compute_image
-                net: host
-                detach: false
-                volumes:
-                  list_concat:
-                    - {get_attr: [ContainersCommon, volumes]}
-                    -
-                      - /var/lib/config-data/nova_libvirt/etc/my.cnf.d/:/etc/my.cnf.d/:ro
-                      - /var/lib/config-data/nova_libvirt/etc/nova/:/etc/nova/:ro
-                      - /var/log/containers/nova:/var/log/nova
-                      - /var/lib/docker-config-scripts/:/docker-config-scripts/
-                user: nova
-                command: "/docker-config-scripts/nova_wait_for_compute_service.py"
-        step_5:
-          nova_cell_v2_discover_hosts:
-            start_order: 0
+          nova_compute:
             image: *nova_compute_image
+            ulimit: {get_param: DockerNovaComputeUlimit}
+            ipc: host
             net: host
-            detach: false
+            privileged: true
+            user: nova
+            restart: always
+            healthcheck:
+              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
+                - {get_attr: [NovaLogging, volumes]}
+                - {get_param: NovaComputeOptVolumes}
                 -
-                  - /var/lib/config-data/nova_libvirt/etc/my.cnf.d/:/etc/my.cnf.d/:ro
-                  - /var/lib/config-data/nova_libvirt/etc/nova/:/etc/nova/:ro
-                  - /var/log/containers/nova:/var/log/nova
-                  - /var/lib/docker-config-scripts/:/docker-config-scripts/
-            user: root
-            command: "/usr/bin/bootstrap_host_exec nova_compute su nova -s /bin/bash -c '/docker-config-scripts/nova_cell_v2_discover_hosts.py'"
+                  - /var/lib/kolla/config_files/nova_compute.json:/var/lib/kolla/config_files/config.json:ro
+                  - /var/lib/config-data/puppet-generated/nova_libvirt/:/var/lib/kolla/config_files/src:ro
+                  - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
+                  - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
+                  - /dev:/dev
+                  - /lib/modules:/lib/modules:ro
+                  - /run:/run
+                  - /var/lib/nova:/var/lib/nova:shared
+                  - /var/lib/libvirt:/var/lib/libvirt
+                  - /sys/class/net:/sys/class/net
+                  - /sys/bus/pci:/sys/bus/pci
             environment:
-              # NOTE: this should force this container to re-run on each
-              # update (scale-out, etc.)
-              - list_join:
-                  - ''
-                  - - 'TRIPLEO_DEPLOY_IDENTIFIER='
-                    - {get_param: DeployIdentifier}
+              list_concat:
+                - {get_param: NovaComputeOptEnvVars}
+                -
+                  - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
         list_concat:
         - {get_attr: [NovaLogging, host_prep_tasks]}
@@ -336,6 +267,10 @@ outputs:
             - name: Set fact nova_compute_enabled
               set_fact:
                 nova_compute_enabled: "{{ nova_compute_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service openstack-nova-compute is running"
+              command: systemctl is-active --quiet openstack-nova-compute
+              tags: validation
+              when: nova_compute_enabled|bool
         - when: step|int == 1
           block:
             - name: Set compute upgrade level to auto
@@ -349,20 +284,13 @@ outputs:
             - name: Stop and disable nova-compute service
               when: nova_compute_enabled|bool
               service: name=openstack-nova-compute state=stopped enabled=no
-            - name: Remove openstack-nova-compute and python-nova package during upgrade
-              package: name={{ item }} state=removed
-              with_items:
-                - openstack-nova-compute
-                - python-nova
+            - name: Set fact for removal of openstack-nova-compute package
+              set_fact:
+                remove_nova_compute_package: {get_param: UpgradeRemoveUnusedPackages}
+            - name: Remove openstack-nova-compute package if operator requests it
+              yum: name=openstack-nova-compute state=removed
               ignore_errors: True
-      update_tasks:
-        - name: Remove openstack-nova-compute and python-nova package during update
-          package: name={{ item }} state=removed
-          with_items:
-            - openstack-nova-compute
-            - python-nova
-          ignore_errors: True
-          when: step|int == 2
+              when: remove_nova_compute_package|bool
       fast_forward_upgrade_tasks:
         - name: Check if nova-compute is deployed
           command:  systemctl is-enabled --quiet openstack-nova-compute

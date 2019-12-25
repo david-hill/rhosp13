@@ -153,14 +153,12 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
+            path: "{{ item }}"
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/lib/ironic, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/ironic, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/httpd/ironic-pxe, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ironic, 'setype': svirt_sandbox_file_t }
+            - /var/lib/ironic
+            - /var/log/containers/ironic
+            - /var/log/containers/httpd/ironic-pxe
         - name: ironic logs readme
           copy:
             dest: /var/log/ironic/readme.txt

@@ -192,16 +192,6 @@ outputs:
             volumes: *mysql_volumes
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
-        step_3:
-          # sync credentials config on the running container if it was
-          # changed by the docker_puppet_task during step 2
-          mysql_sync_credentials:
-            config_volume: mysql
-            start_order: 1
-            action: exec
-            user: root
-            command:
-              [ 'mysql', '/bin/bash', '-c', 'cp /var/lib/kolla/config_files/src/root/.my.cnf /root' ]
       docker_puppet_tasks:
         # MySQL database initialization occurs only on single node
         step_2:
@@ -214,7 +204,7 @@ outputs:
             -
               - /var/lib/mysql:/var/lib/mysql/:rw
               - /var/log/containers/mysql:/var/log/mariadb
-              - /var/lib/config-data/puppet-generated/mysql/root:/root:rw #provides .my.cnf for puppet, changed on password update
+              - /var/lib/config-data/mysql/root:/root:ro #provides .my.cnf
             - if:
               - internal_tls_enabled
               -
@@ -231,13 +221,11 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
+            path: "{{ item }}"
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/log/containers/mysql, 'setype': 'svirt_sandbox_file_t' }
-            - { 'path': /var/lib/mysql, 'setype': 'svirt_sandbox_file_t' }
-            - { 'path': /var/log/mariadb, 'setype': 'svirt_sandbox_file_t' }
+            - /var/log/containers/mysql
+            - /var/lib/mysql
         - name: mysql logs readme
           copy:
             dest: /var/log/mariadb/readme.txt
@@ -256,6 +244,10 @@ outputs:
             - name: Set fact mariadb_enabled
               set_fact:
                 mariadb_enabled: "{{ mariadb_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check if mysql service is running"
+              command: systemctl is-active --quiet mariadb
+              when: mariadb_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable mysql service
@@ -271,20 +263,13 @@ outputs:
             - release == 'ocata'
             - is_bootstrap_node|bool
           block:
-            - name: Remove whitespaces in .my.cnf
-              replace:
-                path: /root/.my.cnf
-                regexp: '^ +'
-                replace: ''
             - name: Create cell0 db
               mysql_db:
                 name: nova_cell0
                 state: present
-                login_unix_socket: '/var/lib/mysql/mysql.sock'
             - name: Grant access to cell0 db
               mysql_user:
                 name: nova
                 host_all: yes
                 state: present
                 priv: '*.*:ALL'
-                login_unix_socket: '/var/lib/mysql/mysql.sock'

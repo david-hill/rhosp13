@@ -48,6 +48,11 @@ parameters:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
+  PcmkConfigRestartTimeout:
+    default: 600
+    description: Time in seconds to wait for a pcmk resource to restart when
+                 a config change is detected and the resource is being restarted
+    type: number
   DeployIdentifier:
     default: ''
     type: string
@@ -137,8 +142,7 @@ outputs:
               - /etc/localtime:/etc/localtime:ro
               - /dev/shm:/dev/shm:rw
               - /etc/sysconfig/docker:/etc/sysconfig/docker:ro
-              - /usr/bin/docker:/usr/bin/docker:ro
-              - /usr/bin/docker-current:/usr/bin/docker-current:ro
+              - /usr/bin:/usr/bin:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
         step_3:
           ovn_dbs_restart_bundle:
@@ -147,11 +151,22 @@ outputs:
             detach: false
             net: host
             user: root
-            environment:
-              - TRIPLEO_MINOR_UPDATE
-            command: /pacemaker_restart_bundle.sh ovn-dbs-bundle ovn_dbs
+            command:
+              - '/usr/bin/bootstrap_host_exec'
+              - 'ovn_dbs'
+              - str_replace:
+                  template:
+                    'if /usr/sbin/pcs resource show ovn-dbs-bundle; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT ovn-dbs-bundle; echo "ovn-dbs-bundle restart invoked"; fi'
+                  params:
+                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
             image: {get_param: DockerOvnDbsConfigImage}
-            volumes: {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
+            volumes:
+              list_concat:
+                - {get_attr: [ContainersCommon, volumes]}
+                -
+                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
+                  - /dev/shm:/dev/shm:rw
+                  - /var/lib/config-data/puppet-generated/ovn_dbs/:/var/lib/kolla/config_files/src:ro
           ovn_dbs_init_bundle:
             start_order: 1
             detach: false
@@ -184,13 +199,11 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
-            setype: "{{ item.setype }}"
+            path: "{{ item }}"
             state: directory
           with_items:
-            - { 'path': /var/log/containers/openvswitch, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/openvswitch/ovn, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/openvswitch, 'setype': svirt_sandbox_file_t }
+            - /var/log/containers/openvswitch
+            - /var/lib/openvswitch/ovn
         - name: openvswitch logs readme
           copy:
             dest: /var/log/openvswitch/readme.txt

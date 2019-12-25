@@ -115,12 +115,7 @@ outputs:
           horizon::cache_backend: django.core.cache.backends.memcached.MemcachedCache
           horizon::django_session_engine: 'django.contrib.sessions.backends.cache'
           horizon::vhost_extra_params: {get_param: HorizonVhostExtraParams}
-          horizon::bind_address:
-            str_replace:
-              template:
-                "%{hiera('$NETWORK')}"
-              params:
-                $NETWORK: {get_param: [ServiceNetMap, HorizonNetwork]}
+          horizon::bind_address: {get_param: [ServiceNetMap, HorizonNetwork]}
           horizon::keystone_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
           horizon::password_validator: {get_param: [HorizonPasswordValidator]}
           horizon::password_validator_help: {get_param: [HorizonPasswordValidatorHelp]}
@@ -142,7 +137,6 @@ outputs:
           horizon::listen_ssl: {get_param: EnableInternalTLS}
           horizon::horizon_ca: {get_param: InternalTLSCAFile}
           horizon::customization_module: {get_param: HorizonCustomizationModule}
-          horizon::file_upload_temp_dir: '/var/tmp'
         -
           if:
           - debug_unset
@@ -171,5 +165,11 @@ outputs:
             - httpd_enabled.rc == 0
           service: name=httpd state=stopped
       service_config_settings:
+        haproxy:
+          tripleo.horizon.firewall_rules:
+            '127 horizon':
+              dport:
+                - 80
+                - 443
         keystone:
           keystone_enable_member: true

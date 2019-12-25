@@ -123,14 +123,10 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent directories
+        - name: create persistent logs directory
           file:
-            path: "{{ item.path }}"
+            path: /var/log/containers/octavia
             state: directory
-            setype: "{{ item.setype }}"
-          with_items:
-            - { 'path': /var/log/containers/octavia, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/octavia, 'setype': svirt_sandbox_file_t }
         - name: octavia logs readme
           copy:
             dest: /var/log/octavia/readme.txt
@@ -143,12 +139,16 @@ outputs:
           tags: common
           block:
             - name: Check if octavia_health_manager is deployed
-              command: systemctl is-enabled --quiet openstack-octavia-health-manager
+              common: systemctl is-enabled --quiet openstack-octavia-health-manager
               ignore_errors: True
               register: octavia_health_enabled_result
             - name: Set fact octavia_health_enabled
               set_fact:
                 octavia_health_enabled: "{{ octavia_health_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service openstack-octavia-health-manager is running"
+              command: systemctl is-active --quiet openstack-octavia-health-manager
+              tags: validation
+              when: octavia_health_enabled|bool
         - when: step|int == 2
           block:
             - name: Stop and disable octavia_health_manager service

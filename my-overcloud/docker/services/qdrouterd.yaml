@@ -107,15 +107,13 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-      - name: create persistent directories
+      - name: create persistent logs directory
         file:
-          path: "{{ item.path }}"
-          setype: "{{ item.setype }}"
+          path: "{{ item }}"
           state: directory
         with_items:
-          - { 'path': /var/log/containers/qdrouterd, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/lib/qdrouterd, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/qdrouterd, 'setype': svirt_sandbox_file_t }
+          - /var/log/containers/qdrouterd
+          - /var/lib/qdrouterd
       - name: qrouterd logs readme
         copy:
           dest: /var/log/qrouterd/readme.txt

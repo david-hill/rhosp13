@@ -33,15 +33,13 @@ outputs:
   host_prep_tasks:
     description: Extra ansible tasks needed for logging to files in the host.
     value:
-      - name: create persistent directories
+      - name: create persistent logs directory
         file:
-          path: "{{ item.path }}"
+          path: "{{ item }}"
           state: directory
-          setype: "{{ item.setype }}"
         with_items:
-          - { 'path': /var/log/containers/keystone, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/containers/httpd/keystone, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/keystone, 'setype': svirt_sandbox_file_t }
+          - /var/log/containers/keystone
+          - /var/log/containers/httpd/keystone
       - name: keystone logs readme
         copy:
           dest: /var/log/keystone/readme.txt

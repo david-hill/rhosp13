@@ -61,6 +61,11 @@ parameters:
     description: >
       Setting this to a unique value will re-run any deployment tasks which
       perform configuration on a Heat stack-update.
+  PcmkConfigRestartTimeout:
+    default: 600
+    description: Time in seconds to wait for a pcmk resource to restart when
+                 a config change is detected and the resource is being restarted
+    type: number
 
 resources:
 
@@ -244,8 +249,7 @@ outputs:
               - /etc/localtime:/etc/localtime:ro
               - /dev/shm:/dev/shm:rw
               - /etc/sysconfig/docker:/etc/sysconfig/docker:ro
-              - /usr/bin/docker:/usr/bin/docker:ro
-              - /usr/bin/docker-current:/usr/bin/docker-current:ro
+              - /usr/bin:/usr/bin:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
         step_2:
           mysql_restart_bundle:
@@ -254,14 +258,22 @@ outputs:
             detach: false
             net: host
             user: root
-            environment:
-              - TRIPLEO_MINOR_UPDATE
-            command: /pacemaker_restart_bundle.sh galera-bundle mysql
+            command:
+              - '/usr/bin/bootstrap_host_exec'
+              - 'mysql'
+              - str_replace:
+                  template:
+                    'if /usr/sbin/pcs resource show galera-bundle; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT galera-bundle; echo "galera-bundle restart invoked"; fi'
+                  params:
+                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
             image: {get_param: DockerMysqlImage}
             volumes:
               list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - - /var/lib/config-data/puppet-generated/mysql/:/var/lib/kolla/config_files/src:ro
+                - {get_attr: [ContainersCommon, volumes]}
+                -
+                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
+                  - /dev/shm:/dev/shm:rw
+                  - /var/lib/config-data/puppet-generated/mysql/:/var/lib/kolla/config_files/src:ro
           mysql_init_bundle:
             start_order: 1
             detach: false
@@ -284,7 +296,6 @@ outputs:
                 - - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
                   - /dev/shm:/dev/shm:rw
                   - /var/lib/mysql:/var/lib/mysql:rw
-                  - /var/lib/config-data/puppet-generated/mysql/root:/root:rw
             environment:
               # NOTE: this should force this container to re-run on each
               # update (scale-out, etc.)
@@ -295,13 +306,11 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
+            path: "{{ item }}"
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - {'path': /var/log/containers/mysql, 'setype': 'svirt_sandbox_file_t'}
-            - {'path': /var/lib/mysql, 'setype': 'svirt_sandbox_file_t'}
-            - {'path': /var/log/mariadb, 'setype': 'svirt_sandbox_file_t'}
+            - /var/log/containers/mysql
+            - /var/lib/mysql
         - name: mysql logs readme
           copy:
             dest: /var/log/mariadb/readme.txt
@@ -504,20 +513,13 @@ outputs:
             - release == 'ocata'
             - is_bootstrap_node|bool
           block:
-            - name: Remove whitespaces in .my.cnf
-              replace:
-                path: /root/.my.cnf
-                regexp: '^ +'
-                replace: ''
             - name: Create cell0 db
               mysql_db:
                 name: nova_cell0
                 state: present
-                login_unix_socket: '/var/lib/mysql/mysql.sock'
             - name: Grant access to cell0 db
               mysql_user:
                 name: nova
                 host_all: yes
                 state: present
                 priv: '*.*:ALL'
-                login_unix_socket: '/var/lib/mysql/mysql.sock'

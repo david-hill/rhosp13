@@ -148,14 +148,7 @@ outputs:
             privileged: true
             restart: always
             healthcheck:
-              test:
-                list_join:
-                  - ' '
-                  - - '/openstack/healthcheck'
-                    - yaql:
-                        expression: str($.data.port)
-                        data:
-                          port: {get_attr: [CinderBase, role_data, config_settings, 'cinder::rabbit_port']}
+              test: /openstack/healthcheck
             volumes: {get_attr: [CinderCommon, cinder_volume_volumes]}
             environment: {get_attr: [CinderCommon, cinder_volume_environment]}
       host_prep_tasks: {get_attr: [CinderCommon, cinder_volume_host_prep_tasks]}
@@ -170,6 +163,10 @@ outputs:
             - name: Set fact cinder_volume_enabled
               set_fact:
                 cinder_volume_enabled: "{{ cinder_volume_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service openstack-cinder-volume is running"
+              shell: systemctl is-active --quiet openstack-cinder-volume
+              when: cinder_volume_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable cinder_volume service

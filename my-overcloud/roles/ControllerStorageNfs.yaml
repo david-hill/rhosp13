@@ -26,7 +26,6 @@
   deprecated_param_extraconfig: 'controllerExtraConfig'
   deprecated_param_flavor: 'OvercloudControlFlavor'
   deprecated_param_image: 'controllerImage'
-  update_serial: 1
   ServicesDefault:
     - OS::TripleO::Services::Aide
     - OS::TripleO::Services::AodhApi
@@ -57,7 +56,6 @@
     - OS::TripleO::Services::CinderBackendDellEMCVMAXISCSI
     - OS::TripleO::Services::CinderBackendDellEMCXTREMIOISCSI
     - OS::TripleO::Services::CinderBackendNetApp
-    - OS::TripleO::Services::CinderBackendPure
     - OS::TripleO::Services::CinderBackendScaleIO
     - OS::TripleO::Services::CinderBackendVRTSHyperScale
     - OS::TripleO::Services::CinderBackup
@@ -83,7 +81,6 @@
     - OS::TripleO::Services::HeatApiCfn
     - OS::TripleO::Services::HeatEngine
     - OS::TripleO::Services::Horizon
-    - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::IronicApi
     - OS::TripleO::Services::IronicConductor
@@ -103,7 +100,6 @@
     - OS::TripleO::Services::ManilaScheduler
     - OS::TripleO::Services::ManilaShare
     - OS::TripleO::Services::Memcached
-    - OS::TripleO::Services::MetricsQdr
     - OS::TripleO::Services::MongoDb
     - OS::TripleO::Services::MySQL
     - OS::TripleO::Services::MySQLClient

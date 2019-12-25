@@ -212,13 +212,11 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
-            setype: "{{ item.setype }}"
+            path: "{{ item }}"
             state: directory
           with_items:
-            - { 'path': /var/log/containers/rabbitmq, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/rabbitmq, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/rabbitmq, 'setype': svirt_sandbox_file_t }
+            - /var/log/containers/rabbitmq
+            - /var/lib/rabbitmq
         - name: rabbitmq logs readme
           copy:
             dest: /var/log/rabbitmq/readme.txt
@@ -237,6 +235,10 @@ outputs:
             - name: Set fact rabbitmq_enabled
               set_fact:
                 rabbitmq_enabled: "{{ rabbitmq_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service rabbitmq server is running"
+              command: systemctl is-active --quiet rabbitmq-server
+              when: rabbitmq_enabled|bool
+              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable rabbitmq service

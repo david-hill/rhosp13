@@ -12,10 +12,6 @@ parameters:
   DockerNovaLibvirtConfigImage:
     description: The container image to use for the nova_libvirt config_volume
     type: string
-  ContainerNovaLibvirtUlimit:
-    default: ['nofile=131072', 'nproc=126960']
-    description: ulimit for Nova Libvirt Container
-    type: comma_delimited_list
   ServiceData:
     default: {}
     description: Dictionary packing service data
@@ -58,10 +54,8 @@ parameters:
     type: number
   NovaEnableRbdBackend:
     default: false
-    description: Whether to enable the Rbd backend for Nova ephemeral storage.
+    description: Whether to enable or not the Rbd backend for Nova
     type: boolean
-    tags:
-      - role_specific
   CinderEnableRbdBackend:
     default: false
     description: Whether to enable or not the Rbd backend for Cinder
@@ -150,19 +144,12 @@ conditions:
 
   need_libvirt_secret:
     or:
-      - equals:
-        - {get_param: [RoleParameters, NovaEnableRbdBackend]}
-        - true
-      - and:
-        - equals:
-          - {get_param: [RoleParameters, NovaEnableRbdBackend]}
-          - ''
-        - equals:
-          - {get_param: NovaEnableRbdBackend}
-          - true
-      - equals:
-        - {get_param: CinderEnableRbdBackend}
-        - true
+    - equals:
+      - {get_param: NovaEnableRbdBackend}
+      - true
+    - equals:
+      - {get_param: CinderEnableRbdBackend}
+      - true
 
   use_tls_for_vnc:
     and:
@@ -221,6 +208,7 @@ outputs:
         map_merge:
           - get_attr: [NovaLibvirtBase, role_data, config_settings]
           - get_attr: [NovaLibvirtLogging, config_settings]
+          - tripleo::profile::base::certmonger_user::libvirt_postsave_cmd: "true" # TODO: restart the libvirt container here
 
       logging_source: {get_attr: [NovaLibvirtBase, role_data, logging_source]}
       logging_groups: {get_attr: [NovaLibvirtBase, role_data, logging_groups]}
@@ -294,7 +282,6 @@ outputs:
           nova_virtlogd:
             start_order: 0
             image: {get_param: DockerNovaLibvirtImage}
-            ulimit: {get_param: ContainerNovaLibvirtUlimit}
             net: host
             pid: host
             privileged: true
@@ -310,7 +297,7 @@ outputs:
                   - /run:/run
                   - /sys/fs/cgroup:/sys/fs/cgroup
                   - /var/lib/nova:/var/lib/nova:shared
-                  - /var/run/libvirt:/var/run/libvirt:shared
+                  - /var/run/libvirt:/var/run/libvirt
                   - /var/lib/libvirt:/var/lib/libvirt
                   - /etc/libvirt/qemu:/etc/libvirt/qemu:ro
                   - /var/log/libvirt/qemu:/var/log/libvirt/qemu
@@ -319,7 +306,6 @@ outputs:
           nova_libvirt:
             start_order: 1
             image: {get_param: DockerNovaLibvirtImage}
-            ulimit: {get_param: ContainerNovaLibvirtUlimit}
             net: host
             pid: host
             privileged: true
@@ -355,7 +341,10 @@ outputs:
                                 - libvirt_specific_ca_unset
                                 - get_param: InternalTLSCAFile
                                 - get_param: LibvirtCACert
-                      - /etc/pki/libvirt/:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt/:ro
+                      - /etc/pki/libvirt/servercert.pem:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt/servercert.pem:ro
+                      - /etc/pki/libvirt/private/serverkey.pem:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt/private/serverkey.pem:ro
+                      - /etc/pki/libvirt/clientcert.pem:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt/clientcert.pem:ro
+                      - /etc/pki/libvirt/private/clientkey.pem:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt/private/clientkey.pem:ro
                     - null
                 -
                   if:
@@ -409,9 +398,6 @@ outputs:
             - /etc/libvirt/qemu
             - /var/lib/libvirt
             - /var/log/containers/libvirt
-            - /var/run/libvirt
-            - /var/log/libvirt
-            - /var/log/libvirt/qemu
         # qemu user on host will be cretaed by libvirt package install, ensure
         # the qemu user created with same uid/gid as like libvirt package.
         # These specific values are required since ovs is running on host.
@@ -455,11 +441,6 @@ outputs:
             - libvirtd.service
             - virtlogd.socket
           when: libvirt_installed.rc == 0
-        - name: ensure /var/run/libvirt is present upon reboot
-          copy:
-            dest: /etc/tmpfiles.d/var-run-libvirt.conf
-            content: |
-              d /var/run/libvirt 0755 root root - -
       metadata_settings:
         get_attr: [NovaLibvirtBase, role_data, metadata_settings]
       upgrade_tasks:
@@ -473,6 +454,10 @@ outputs:
             - name: Set fact nova_libvirt_enabled
               set_fact:
                 nova_libvirt_enabled: "{{ nova_libvirt_enabled_result.rc == 0 }}"
+            - name: "PreUpgrade step0,validation: Check service libvirtd is running"
+              command: systemctl is-active --quiet libvirtd
+              tags: validation
+              when: nova_libvirt_enabled|bool
         - when: step|int == 2
           block:
             - name: Stop and disable libvirtd service

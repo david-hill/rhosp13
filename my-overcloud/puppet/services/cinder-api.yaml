@@ -4,17 +4,13 @@ description: >
   OpenStack Cinder API service configured with Puppet
 
 parameters:
-  CinderDefaultVolumeType:
-    default: tripleo
-    description: The name of Cinder's default volume type.
-    type: string
   CinderEnableDBPurge:
     default: true
     description: |
       Whether to create cron job for purging soft deleted rows in Cinder database.
     type: boolean
   CinderPassword:
-    description: The password for the cinder service and db account.
+    description: The password for the cinder service account, used by cinder-api.
     type: string
     hidden: true
   ServiceData:
@@ -119,7 +115,6 @@ outputs:
             cinder::keystone::authtoken::project_domain_name: 'Default'
             cinder::policy::policies: {get_param: CinderApiPolicies}
             cinder::ceilometer::notification_driver: {get_param: NotificationDriver}
-            cinder::api::default_volume_type: {get_param: CinderDefaultVolumeType}
             cinder::api::enable_proxy_headers_parsing: true
 
             cinder::api::nova_catalog_info: 'compute:nova:internalURL'
@@ -142,18 +137,12 @@ outputs:
                   $NETWORK: {get_param: [ServiceNetMap, CinderApiNetwork]}
             cinder::wsgi::apache::ssl: {get_param: EnableInternalTLS}
             cinder::api::service_name: 'httpd'
-            # NOTE: bind IP is found in hiera replacing the network name with the local node IP
+            # NOTE: bind IP is found in Heat replacing the network name with the local node IP
             # for the given network; replacement examples (eg. for internal_api):
             # internal_api -> IP
             # internal_api_uri -> [IP]
             # internal_api_subnet - > IP/CIDR
-            cinder::wsgi::apache::bind_host:
-              str_replace:
-                template:
-                  "%{hiera('$NETWORK')}"
-                params:
-                  $NETWORK: {get_param: [ServiceNetMap, CinderApiNetwork]}
-          -
+            cinder::wsgi::apache::bind_host: {get_param: [ServiceNetMap, CinderApiNetwork]}
             cinder::wsgi::apache::servername:
               str_replace:
                 template:
@@ -175,14 +164,9 @@ outputs:
             - {get_param: CinderApiLoggingSource}
         keystone:
           cinder::keystone::auth::tenant: 'service'
-          # Create the "volume" service using the same catalog info as the
-          # "volumev3" service (see LP#1822080).
-          cinder::keystone::auth::service_name: cinderv3
-          cinder::keystone::auth::service_type: volume
-          cinder::keystone::auth::service_description: 'Cinder Service v3'
-          cinder::keystone::auth::public_url: {get_param: [EndpointMap, CinderV3Public, uri]}
-          cinder::keystone::auth::internal_url: {get_param: [EndpointMap, CinderV3Internal, uri]}
-          cinder::keystone::auth::admin_url: {get_param: [EndpointMap, CinderV3Admin, uri]}
+          cinder::keystone::auth::public_url: {get_param: [EndpointMap, CinderPublic, uri]}
+          cinder::keystone::auth::internal_url: {get_param: [EndpointMap, CinderInternal, uri]}
+          cinder::keystone::auth::admin_url: {get_param: [EndpointMap, CinderAdmin, uri]}
           cinder::keystone::auth::public_url_v2: {get_param: [EndpointMap, CinderV2Public, uri]}
           cinder::keystone::auth::internal_url_v2: {get_param: [EndpointMap, CinderV2Internal, uri]}
           cinder::keystone::auth::admin_url_v2: {get_param: [EndpointMap, CinderV2Admin, uri]}

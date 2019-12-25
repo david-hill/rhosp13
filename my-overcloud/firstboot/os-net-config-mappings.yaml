@@ -100,10 +100,9 @@ resources:
               if 'dmiString' in data[node] and 'id' in data[node]:
                 ps = Popen([ 'dmidecode',
                              '--string', data[node].get('dmiString') ],
-                             stdout=PIPE, universal_newlines=True)
+                             stdout=PIPE)
                 out, err = ps.communicate()
-                # See LP#1816652
-                if data[node].get('id').lower() == out.rstrip().lower():
+                if data[node].get('id') == out.rstrip():
                   write_mapping_file(lc_interface_mapping)
                   break
             "

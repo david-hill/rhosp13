@@ -67,18 +67,15 @@ parameters:
   HAProxyInternalTLSKeysDirectory:
     default: '/etc/pki/tls/private/haproxy'
     type: string
-  HAProxySyslogAddress:
-    default: /dev/log
-    description: Syslog address where HAproxy will send its log
-    type: string
-  HAProxySyslogFacility:
-    default: local0
-    description: Syslog facility HAProxy will use for its logs
-    type: string
   ConfigDebug:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
+  PcmkConfigRestartTimeout:
+    default: 600
+    description: Time in seconds to wait for a pcmk resource to restart when
+                 a config change is detected and the resource is being restarted
+    type: number
   DeployIdentifier:
     default: ''
     type: string
@@ -112,8 +109,6 @@ resources:
       DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
-      HAProxySyslogAddress: {get_param: HAProxySyslogAddress}
-      HAProxySyslogFacility: {get_param: HAProxySyslogFacility}
 
 outputs:
   role_data:
@@ -220,8 +215,7 @@ outputs:
               - /etc/localtime:/etc/localtime:ro
               - /dev/shm:/dev/shm:rw
               - /etc/sysconfig/docker:/etc/sysconfig/docker:ro
-              - /usr/bin/docker:/usr/bin/docker:ro
-              - /usr/bin/docker-current:/usr/bin/docker-current:ro
+              - /usr/bin:/usr/bin:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
             image: {get_param: DockerHAProxyImage}
         step_2:
@@ -231,14 +225,22 @@ outputs:
             net: host
             user: root
             config_volume: haproxy
-            environment:
-              - TRIPLEO_MINOR_UPDATE
-            command: /pacemaker_restart_bundle.sh haproxy-bundle haproxy
+            command:
+              - '/usr/bin/bootstrap_host_exec'
+              - 'haproxy'
+              - str_replace:
+                  template:
+                    'if /usr/sbin/pcs resource show haproxy-bundle; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT haproxy-bundle; echo "haproxy-bundle restart invoked"; fi'
+                  params:
+                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
             image: {get_param: DockerHAProxyImage}
             volumes:
               list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - - /var/lib/config-data/puppet-generated/haproxy/:/var/lib/kolla/config_files/src:ro
+                - {get_attr: [ContainersCommon, volumes]}
+                -
+                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
+                  - /dev/shm:/dev/shm:rw
+                  - /var/lib/config-data/puppet-generated/haproxy/:/var/lib/kolla/config_files/src:ro
           haproxy_init_bundle:
             start_order: 3
             detach: false
@@ -277,41 +279,12 @@ outputs:
                   - - 'TRIPLEO_DEPLOY_IDENTIFIER='
                     - {get_param: DeployIdentifier}
       host_prep_tasks:
-        - name: Check if rsyslog exists
-          shell: systemctl is-active rsyslog
-          register: rsyslog_config
-        - when: rsyslog_config.rc == 0
-          block:
-            - name: Forward logging to haproxy.log file
-              blockinfile:
-                content: |
-                  if $syslogfacility-text == '{{facility}}' and $programname == 'haproxy' then -/var/log/containers/haproxy/haproxy.log
-                  & stop
-                create: yes
-                path: /etc/rsyslog.d/openstack-haproxy.conf
-              vars:
-                facility: {get_param: HAProxySyslogFacility}
-              register: logconfig
-            - name: restart rsyslog service after logging conf change
-              service:
-                name: rsyslog
-                state: restarted
-              when: logconfig is changed
         - name: create persistent directories
           file:
-            path: "{{ item.path }}"
+            path: "{{ item }}"
             state: directory
-            setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/log/containers/haproxy, 'setype': var_log_t }
-            - { 'path': /var/lib/haproxy, 'setype': svirt_sandbox_file_t }
-        - name: haproxy logs readme
-          copy:
-            dest: /var/log/haproxy/readme.txt
-            content: |
-              Log files from the haproxy containers can be found under
-              /var/log/containers/haproxy.
-          ignore_errors: true
+            - /var/lib/haproxy
       metadata_settings:
         get_attr: [HAProxyBase, role_data, metadata_settings]
       update_tasks:

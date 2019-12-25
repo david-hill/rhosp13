@@ -44,16 +44,3 @@ outputs:
         timezone::timezone: {get_param: TimeZone}
       step_config: |
         include ::timezone
-        exec { 'timezone-reload-rsyslog':
-            path        => ['/bin', '/usr/bin'],
-            command     => 'systemctl restart rsyslog',
-            refreshonly => true,
-            tag         => 'timezone-reload-services',
-        }
-        exec { 'timezone-reload-crond':
-            path        => ['/bin', '/usr/bin'],
-            command     => 'systemctl restart crond',
-            refreshonly => true,
-            tag         => 'timezone-reload-services',
-        }
-        File<| title == $::timezone::localtime_file |> ~> Exec<| tag == 'timezone-reload-services' |>

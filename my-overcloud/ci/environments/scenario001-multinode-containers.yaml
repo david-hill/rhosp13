@@ -6,8 +6,7 @@ resource_registry:
   OS::TripleO::Services::CephOSD: ../../docker/services/ceph-ansible/ceph-osd.yaml
   OS::TripleO::Services::CephClient: ../../docker/services/ceph-ansible/ceph-client.yaml
   OS::TripleO::Services::PankoApi: ../../docker/services/panko-api.yaml
-  OS::TripleO::Services::Collectd: ../../docker/services/metrics/collectd.yaml
-  OS::TripleO::Services::MetricsQdr: ../../docker/services/metrics/qdr.yaml
+  OS::TripleO::Services::Collectd: ../../docker/services/collectd.yaml
   OS::TripleO::Services::RabbitMQ: ../../docker/services/pacemaker/rabbitmq.yaml
   OS::TripleO::Services::HAproxy: ../../docker/services/pacemaker/haproxy.yaml
   OS::TripleO::Services::Pacemaker: ../../puppet/services/pacemaker.yaml
@@ -87,7 +86,6 @@ parameter_defaults:
     - OS::TripleO::Services::CinderScheduler
     - OS::TripleO::Services::CinderVolume
     - OS::TripleO::Services::Collectd
-    - OS::TripleO::Services::MetricsQdr
     - OS::TripleO::Services::TripleoPackages
     - OS::TripleO::Services::TripleoFirewall
     - OS::TripleO::Services::Fluentd
@@ -114,15 +112,10 @@ parameter_defaults:
   Debug: true
   DockerPuppetDebug: True
   CephAnsibleDisksConfig:
-    osd_objectstore: bluestore
-    osd_scenario: lvm
-    lvm_volumes:
-      - data: ceph_lv_data
-        data_vg: ceph_vg
-        db: ceph_lv_db
-        db_vg: ceph_vg
-        wal: ceph_lv_wal
-        wal_vg: ceph_vg
+    devices:
+      - /dev/loop3
+    journal_size: 512
+    osd_scenario: collocated
   CephPoolDefaultPgNum: 32
   CephPoolDefaultSize: 1
   CephPools:

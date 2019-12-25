@@ -32,15 +32,13 @@ outputs:
   host_prep_tasks:
     description: Extra ansible tasks needed for logging to files in the host.
     value:
-      - name: create persistent directories
+      - name: create persistent logs directory
         file:
-          path: "{{ item.path }}"
+          path: "{{ item }}"
           state: directory
-          setype: "{{ item.setype }}"
         with_items:
-          - { 'path': /var/log/containers/barbican, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/containers/httpd/barbican-api, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/barbican, 'setype': svirt_sandbox_file_t }
+          - /var/log/containers/barbican
+          - /var/log/containers/httpd/barbican-api
       - name: barbican logs readme
         copy:
           dest: /var/log/barbican/readme.txt

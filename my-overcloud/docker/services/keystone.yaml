@@ -101,12 +101,8 @@ outputs:
         config_image: &keystone_config_image {get_param: DockerKeystoneConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/keystone.json:
-          command: /usr/sbin/httpd
+          command: /usr/sbin/httpd -DFOREGROUND
           config_files:
-            - source: "/var/lib/kolla/config_files/src/etc/keystone/fernet-keys"
-              dest: "/etc/keystone/fernet-keys"
-              merge: false
-              preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
               merge: true
@@ -230,6 +226,12 @@ outputs:
             - set_fact:
                 httpd_running: "{{ httpd_running_result.rc == 0 }}"
               when: httpd_running is undefined
+            - name: "PreUpgrade step0,validation: Check if keystone_wsgi is running under httpd"
+              shell: systemctl status 'httpd' | grep -q keystone
+              tags: validation
+              when:
+                - keystone_httpd_enabled|bool
+                - httpd_running|bool
         - when: step|int == 2
           block:
             - name: Stop and disable keystone service (running under httpd)
