@@ -27,7 +27,6 @@
         - name: Tune-d Configuration
           lineinfile:
             dest: /etc/tuned/{{ _TUNED_PROFILE_NAME_ }}-variables.conf
-            create: yes
             regexp: '^isolated_cores=.*'
             line: 'isolated_cores={{ _TUNED_CORES_ }}'
           when: _TUNED_CORES_|default("") != ""

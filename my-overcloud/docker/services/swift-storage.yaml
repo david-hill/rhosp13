@@ -468,25 +468,28 @@ outputs:
               Log files from swift containers can be found under
               /var/log/containers/swift and /var/log/containers/httpd/swift-*.
           ignore_errors: true
-        - name: Set fact for SwiftRawDisks
-          set_fact:
-            swift_raw_disks: {get_param: SwiftRawDisks}
         - name: Format SwiftRawDisks
           filesystem:
             fstype: xfs
-            dev: "{{ swift_raw_disks[item]['base_dir']|default('/dev') }}/{{ item }}"
+            dev: /dev/{{ item }}
             opts: -f -i size=1024
-          with_items: "{{ swift_raw_disks }}"
-          when: swift_raw_disks
+          with_items:
+            - repeat:
+                template: 'DEVICE'
+                for_each:
+                  DEVICE: {get_param: SwiftRawDisks}
         - name: Mount devices defined in SwiftRawDisks
           mount:
             name: /srv/node/{{ item }}
-            src: "{{ swift_raw_disks[item]['base_dir']|default('/dev') }}/{{ item }}"
+            src: /dev/{{ item }}
             fstype: xfs
             opts: noatime
             state: mounted
-          with_items: "{{ swift_raw_disks }}"
-          when: swift_raw_disks
+          with_items:
+            - repeat:
+                template: 'DEVICE'
+                for_each:
+                  DEVICE: {get_param: SwiftRawDisks}
       upgrade_tasks:
         - when: step|int == 0
           tags: common

@@ -90,16 +90,6 @@ resources:
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
-  OctaviaController:
-    type: ./octavia-controller.yaml
-    properties:
-      ServiceData: {get_param: ServiceData}
-      ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
-      EndpointMap: {get_param: EndpointMap}
-      RoleName: {get_param: RoleName}
-      RoleParameters: {get_param: RoleParameters}
-
 outputs:
   role_data:
     description: Role data for the Octavia API service.
@@ -109,10 +99,19 @@ outputs:
       config_settings:
         map_merge:
           - get_attr: [OctaviaBase, role_data, config_settings]
-          - get_attr: [OctaviaController, role_data, config_settings]
           - octavia::keystone::authtoken::auth_uri: {get_param: [EndpointMap, KeystoneInternal, uri] }
           - get_attr: [TLSProxyBase, role_data, config_settings]
             octavia::policy::policies: {get_param: OctaviaApiPolicies}
+            octavia::db::database_connection:
+              make_url:
+                scheme: {get_param: [EndpointMap, MysqlInternal, protocol]}
+                username: {get_param: OctaviaUserName}
+                password: {get_param: OctaviaPassword}
+                host: {get_param: [EndpointMap, MysqlInternal, host]}
+                path: /octavia
+                query:
+                  read_default_file: /etc/my.cnf.d/tripleo.cnf
+                  read_default_group: tripleo
             octavia::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             octavia::keystone::authtoken::project_name: {get_param: OctaviaProjectName}
             octavia::keystone::authtoken::password: {get_param: OctaviaPassword}
