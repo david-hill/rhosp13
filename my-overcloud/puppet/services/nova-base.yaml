@@ -132,7 +132,7 @@ parameters:
     type: string
     description: >
         Cron to move deleted instances to another table - Max Rows
-    default: '100'
+    default: '1000'
   NovaCronArchiveDeleteRowsUser:
     type: string
     description: >
@@ -153,6 +153,20 @@ parameters:
     description: >
         Endpoint interface to be used for the placement API.
     default: 'internal'
+  NovaCronArchiveDeleteAllCells:
+    type: boolean
+    description: >
+        Archive deleted instances from all cells
+    default: true
+  NovaCronArchiveDeleteRowsAge:
+    type: number
+    description: >
+        Cron to archive deleted instances - Age
+        This will define the retention policy when
+        archiving the deleted instances entries in days.
+        0 means, purge data older than today in
+        shadow tables.
+    default: 90
 
 conditions:
 
@@ -258,6 +272,8 @@ outputs:
           nova::cron::archive_deleted_rows::user: {get_param: NovaCronArchiveDeleteRowsUser}
           nova::cron::archive_deleted_rows::destination: {get_param: NovaCronArchiveDeleteRowsDestination}
           nova::cron::archive_deleted_rows::until_complete: {get_param: NovaCronArchiveDeleteRowsUntilComplete}
+          nova::cron::archive_deleted_rows::all_cells: {get_param: NovaCronArchiveDeleteAllCells}
+          nova::cron::archive_deleted_rows::age: {get_param: NovaCronArchiveDeleteRowsAge}
         -
           if:
           - compute_upgrade_level_empty

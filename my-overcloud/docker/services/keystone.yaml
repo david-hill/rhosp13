@@ -174,7 +174,12 @@ outputs:
             action: exec
             user: root
             command:
-              [ 'keystone', '/usr/bin/bootstrap_host_exec', 'keystone' ,'keystone-manage', 'bootstrap', '--bootstrap-password', {get_param: AdminPassword} ]
+              [ 'keystone', '/usr/bin/bootstrap_host_exec', 'keystone' ,'keystone-manage', 'bootstrap' ]
+            environment:
+              - list_join:
+                  - ''
+                  - - 'OS_BOOTSTRAP_PASSWORD='
+                    - {get_param: AdminPassword}
           keystone_cron:
             start_order: 4
             image: *keystone_image

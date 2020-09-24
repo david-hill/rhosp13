@@ -47,10 +47,10 @@ parameters:
     description: Load balancer topology configuration.
     type: string
   OctaviaFlavorId:
-    default: 65
+    default: '65'
     description: Nova flavor ID to be used when creating the nova flavor for
                  amphora.
-    type: number
+    type: string
   OctaviaTimeoutClientData:
     default: 50000
     description: Frontend client inactivity timeout.
@@ -67,6 +67,26 @@ parameters:
     default: 0
     description: Time to wait for TCP packets for content inspection.
     type: number
+  OctaviaConnectionMaxRetries:
+    default: 120
+    description: Retry threshold for connecting to amphorae.
+    type: number
+  OctaviaConnectionLogging:
+    default: true
+    description: When false, tenant connection flows will not be logged.
+    type: boolean
+  OctaviaBuildActiveRetries:
+    default: 120
+    description: Retry threshold for waiting for a build slot for an amphorae.
+    type: number
+  OctaviaPortDetachTimeout:
+    default: 300
+    description: Seconds to wait for a port to detach from an amphora.
+    type: number
+  OctaviaAntiAffinity:
+    default: true
+    description: Flag to indicate if anti-affinity feature is turned on.
+    type: boolean
 
 conditions:
   octavia_topology_unset: {equals : [{get_param: OctaviaLoadBalancerTopology}, ""]}
@@ -100,6 +120,11 @@ outputs:
             octavia::controller::timeout_member_connect: {get_param: OctaviaTimeoutMemberConnect}
             octavia::controller::timeout_member_data: {get_param: OctaviaTimeoutMemberData}
             octavia::controller::timeout_tcp_inspect: {get_param: OctaviaTimeoutTcpInspect}
+            octavia::controller::connection_max_retries: {get_param: OctaviaConnectionMaxRetries}
+            octavia::controller::connection_logging: {get_param: OctaviaConnectionLogging}
+            octavia::controller::build_active_retries: {get_param: OctaviaBuildActiveRetries}
+            octavia::controller::port_detach_timeout: {get_param: OctaviaPortDetachTimeout}
+            octavia::nova::enable_anti_affinity: {get_param: OctaviaAntiAffinity}
           -
             if:
             - octavia_topology_unset

@@ -10,6 +10,14 @@ parameters:
   DockerRabbitmqConfigImage:
     description: The container image to use for the rabbitmq config_volume
     type: string
+  ClusterCommonTag:
+    default: false
+    description: When set to false, a pacemaker service is configured
+                 to use a floating tag for its container image name,
+                 e.g. 'REGISTRY/NAMESPACE/IMAGENAME:pcmklatest'. When
+                 set to true, the service uses a floating prefix as
+                 well, e.g. 'cluster-common-tag/IMAGENAME:pcmklatest'.
+    type: boolean
   EndpointMap:
     default: {}
     description: Mapping of service endpoint -> protocol. Typically set
@@ -53,6 +61,7 @@ parameters:
 
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
+  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
 
 resources:
 
@@ -79,12 +88,15 @@ outputs:
           - {get_attr: [RabbitmqBase, role_data, config_settings]}
           - rabbitmq::service_manage: false
             tripleo::profile::pacemaker::rabbitmq_bundle::rabbitmq_docker_image: &rabbitmq_image_pcmklatest
-              list_join:
-                - ':'
-                - - yaql:
-                      data: {get_param: DockerRabbitmqImage}
-                      expression: $.data.rightSplit(separator => ":", maxSplits => 1)[0]
-                  - 'pcmklatest'
+              yaql:
+                data:
+                  if:
+                    - common_tag_enabled
+                    - yaql:
+                        data: {get_param: DockerRabbitmqImage}
+                        expression: concat("cluster-common-tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                    - {get_param: DockerRabbitmqImage}
+                expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
             tripleo::profile::pacemaker::rabbitmq_bundle::control_port: 3122
             tripleo.rabbitmq.firewall_rules:
               '109 rabbitmq-bundle':
@@ -276,14 +288,16 @@ outputs:
               register: rabbitmq_image_id
             - block:
                 - name: Get a list of container using Rabbitmq image
-                  shell: "docker ps -a -q -f 'ancestor={{rabbitmq_image_id.stdout}}'"
+                  shell: "docker ps -a -q -f 'ancestor={{ item }}'"
+                  with_items: "{{ rabbitmq_image_id.stdout_lines }}"
                   register: rabbitmq_containers_to_destroy
-                # It will be recreated with the delpoy step.
+                # It will be recreated with the deploy step.
                 - name: Remove any container using the same Rabbitmq image
-                  shell: "docker rm -fv {{item}}"
-                  with_items: "{{ rabbitmq_containers_to_destroy.stdout_lines }}"
+                  shell: "docker rm -fv {{ item }}"
+                  with_items: "{{ rabbitmq_containers_to_destroy.results | map(attribute='stdout_lines') | list | flatten }}"
                 - name: Remove previous Rabbitmq images
-                  shell: "docker rmi -f {{rabbitmq_image_id.stdout}}"
+                  shell: "docker rmi -f {{ item }}"
+                  with_items: "{{ rabbitmq_image_id.stdout_lines }}"
               when:
                 - rabbitmq_image_id.stdout != ''
             - name: Pull latest Rabbitmq images
