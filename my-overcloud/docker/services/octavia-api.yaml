@@ -39,11 +39,16 @@ parameters:
   EnableInternalTLS:
     type: boolean
     default: false
+  NeutronMechanismDrivers:
+    default: 'openvswitch'
+    description: |
+        The mechanism drivers for the Neutron tenant network.
+    type: comma_delimited_list
 
 conditions:
 
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-
+  is_ovn_in_neutron_mechanism_driver: {contains: ['ovn', {get_param: NeutronMechanismDrivers}]}
 
 resources:
 
@@ -82,6 +87,11 @@ outputs:
         map_merge:
           - {get_attr: [OctaviaApiPuppetBase, role_data, config_settings]}
           - {get_attr: [OctaviaFlavor, role_data, config_settings]}
+          -
+            if:
+              - is_ovn_in_neutron_mechanism_driver
+              - octavia::api::provider_drivers: 'amphora: Octavia Amphora Driver.,octavia: Deprecated alias of the Octavia Amphora driver.,ovn: Octavia OVN driver.'
+              - {}
       logging_source: {get_attr: [OctaviaApiPuppetBase, role_data, logging_source]}
       logging_groups: {get_attr: [OctaviaApiPuppetBase, role_data, logging_groups]}
       service_config_settings: {get_attr: [OctaviaApiPuppetBase, role_data, service_config_settings]}
@@ -105,6 +115,23 @@ outputs:
               preserve_properties: true
           permissions:
             - path: /var/log/octavia
+              owner: octavia:octavia
+              recurse: true
+            - path: /var/run/octavia
+              owner: octavia:octavia
+              recurse: true
+        /var/lib/kolla/config_files/octavia_driver_agent.json:
+          command: /usr/bin/octavia-driver-agent --config-file /usr/share/octavia/octavia-dist.conf --config-file /etc/octavia/octavia.conf --log-file /var/log/octavia/driver-agent.log --config-dir /etc/octavia/conf.d/common
+          config_files:
+            - source: "/var/lib/kolla/config_files/src/*"
+              dest: "/"
+              merge: true
+              preserve_properties: true
+          permissions:
+            - path: /var/log/octavia
+              owner: octavia:octavia
+              recurse: true
+            - path: /var/run/octavia
               owner: octavia:octavia
               recurse: true
       docker_puppet_tasks:
@@ -168,6 +195,7 @@ outputs:
                       - /var/lib/kolla/config_files/octavia_api.json:/var/lib/kolla/config_files/config.json:ro
                       - /var/lib/config-data/puppet-generated/octavia/:/var/lib/kolla/config_files/src:ro
                       - /var/log/containers/octavia:/var/log/octavia:z
+                      - /var/run/octavia:/var/run/octavia:shared,z
                       - /var/log/containers/httpd/octavia-api:/var/log/httpd:z
                       -
                         if:
@@ -181,6 +209,26 @@ outputs:
                           - ''
                 environment:
                   - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+            - if:
+                - is_ovn_in_neutron_mechanism_driver
+                - octavia_driver_agent:
+                    start_order: 2
+                    image: *octavia_api_image
+                    net: host
+                    privileged: true
+                    restart: always
+                    volumes:
+                      list_concat:
+                        - {get_attr: [ContainersCommon, volumes]}
+                        -
+                          - /var/lib/kolla/config_files/octavia_driver_agent.json:/var/lib/kolla/config_files/config.json:ro
+                          - /var/lib/config-data/puppet-generated/octavia/:/var/lib/kolla/config_files/src:ro
+                          - /var/log/containers/octavia:/var/log/octavia:z
+                          - /var/run/octavia:/var/run/octavia:shared,z
+                    environment:
+                      - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+                - {}
+
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -191,6 +239,7 @@ outputs:
             - { 'path': /var/log/containers/octavia, 'setype': svirt_sandbox_file_t }
             - { 'path': /var/log/containers/httpd/octavia-api, 'setype': svirt_sandbox_file_t }
             - { 'path': /var/log/octavia, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/run/octavia, 'setype': svirt_sandbox_file_t, 'mode': '0755' }
         - name: octavia logs readme
           copy:
             dest: /var/log/octavia/readme.txt
@@ -198,6 +247,11 @@ outputs:
               Log files from octavia containers can be found under
               /var/log/containers/octavia and /var/log/containers/httpd/octavia-api.
           ignore_errors: true
+        - name: ensure /var/run/octavia is present upon reboot
+          copy:
+            dest: /etc/tmpfiles.d/var-run-octavia.conf
+            content: |
+              d /var/run/octavia 0755 root root - -
       update_tasks:
         - name: Set internal tls variable
           set_fact:

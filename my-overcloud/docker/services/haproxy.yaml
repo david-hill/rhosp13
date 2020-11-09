@@ -82,6 +82,10 @@ parameters:
     type: string
     description: Specifies the default CA cert to use if TLS is used for
                  services in the internal network.
+  InternalTLSCRLPEMDir:
+    default: '/etc/pki/CA/crl/'
+    type: string
+    description: The directory of the CRL PEM file to be mounted.
   ConfigDebug:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
@@ -162,10 +166,18 @@ outputs:
                   - - {get_param: InternalTLSCAFile}
                     - {get_param: InternalTLSCAFile}
                     - 'ro'
+              - list_join:
+                  - ':'
+                  - - {get_param: InternalTLSCRLPEMDir}
+                    - {get_param: InternalTLSCRLPEMDir}
+                    - 'ro'
             - null
       kolla_config:
         /var/lib/kolla/config_files/haproxy.json:
-          command: /usr/sbin/haproxy-systemd-wrapper -f /etc/haproxy/haproxy.cfg
+          # HAProxy 1.8 doesn't ship haproxy-systemd-wrapper, we have
+          # to use a new dedicated option for live config reload.
+          # Note: we can't use quotes in kolla command, hence the workaround
+          command: bash -c $* -- eval if [ -f /usr/sbin/haproxy-systemd-wrapper ]; then exec /usr/sbin/haproxy-systemd-wrapper -f /etc/haproxy/haproxy.cfg; else exec /usr/sbin/haproxy -f /etc/haproxy/haproxy.cfg -Ws; fi
           config_files:
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
@@ -247,8 +259,8 @@ outputs:
                         - /etc/pki/tls/private/haproxy:/var/lib/kolla/config_files/src-tls/etc/pki/tls/private/haproxy:ro
                         - list_join:
                             - ':'
-                            - - {get_param: InternalTLSCAFile}
-                              - {get_param: InternalTLSCAFile}
+                            - - {get_param: InternalTLSCRLPEMDir}
+                              - {get_param: InternalTLSCRLPEMDir}
                               - 'ro'
                       - null
               environment:

@@ -161,15 +161,21 @@ outputs:
       config_settings:
         map_merge:
           - tripleo.metrics_qdr.firewall_rules:
-              '109 metrics qdr':
-                dport:
-                  - {get_param: MetricsQdrPort}
+            '109 metrics qdr':
+              dport:
+                - {get_param: MetricsQdrPort}
             tripleo::profile::base::metrics::qdr::listener_addr:
               str_replace:
                 template:
                   "%{hiera('$NETWORK')}"
                 params:
-                  $NETWORK: {get_param: [ServiceNetMap, MetricsQdrNetwork]}
+                  $NETWORK:
+                    get_param:
+                      - ServiceNetMap
+                      - str_replace:
+                         template: "ROLENAMEMetricsQdrNetwork"
+                         params:
+                           ROLENAME: {get_param: RoleName}
             tripleo::profile::base::metrics::qdr::listener_port: {get_param: MetricsQdrPort}
             tripleo::profile::base::metrics::qdr::username: {get_param: MetricsQdrUsername}
             tripleo::profile::base::metrics::qdr::password: {get_param: MetricsQdrPassword}
