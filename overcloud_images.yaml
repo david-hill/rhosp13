@@ -1,4 +1,4 @@
-# Generated with the following on 2020-11-08T21:23:32.920804
+# Generated with the following on 2020-11-21T15:27:19.937368
 #
 #   openstack overcloud container image prepare --namespace=registry.access.redhat.com/rhosp13 --push-destination=192.0.2.1:8787 --prefix=openstack- --tag-from-label {version}-{release} --output-env-file=/home/stack/rhosp13/overcloud_images.yaml --output-images-file /home/stack/local_registry_images.yaml
 #
@@ -23,10 +23,10 @@ parameter_defaults:
   DockerCrondImage: 192.0.2.1:8787/rhosp13/openstack-cron:13.0-141
   DockerGlanceApiConfigImage: 192.0.2.1:8787/rhosp13/openstack-glance-api:13.0-132
   DockerGlanceApiImage: 192.0.2.1:8787/rhosp13/openstack-glance-api:13.0-132
-  DockerGnocchiApiImage: 192.0.2.1:8787/rhosp13/openstack-gnocchi-api:13.0-132
-  DockerGnocchiConfigImage: 192.0.2.1:8787/rhosp13/openstack-gnocchi-api:13.0-132
-  DockerGnocchiMetricdImage: 192.0.2.1:8787/rhosp13/openstack-gnocchi-metricd:13.0-131
-  DockerGnocchiStatsdImage: 192.0.2.1:8787/rhosp13/openstack-gnocchi-statsd:13.0-130
+  DockerGnocchiApiImage: 192.0.2.1:8787/rhosp13/openstack-gnocchi-api:13.0-132.1604505197
+  DockerGnocchiConfigImage: 192.0.2.1:8787/rhosp13/openstack-gnocchi-api:13.0-132.1604505197
+  DockerGnocchiMetricdImage: 192.0.2.1:8787/rhosp13/openstack-gnocchi-metricd:13.0-131.1604505191
+  DockerGnocchiStatsdImage: 192.0.2.1:8787/rhosp13/openstack-gnocchi-statsd:13.0-130.1604505187
   DockerHAProxyConfigImage: 192.0.2.1:8787/rhosp13/openstack-haproxy:13.0-136
   DockerHAProxyImage: 192.0.2.1:8787/rhosp13/openstack-haproxy:13.0-136
   DockerHeatApiCfnConfigImage: 192.0.2.1:8787/rhosp13/openstack-heat-api-cfn:13.0-127
@@ -48,18 +48,18 @@ parameter_defaults:
   DockerMysqlClientConfigImage: 192.0.2.1:8787/rhosp13/openstack-mariadb:13.0-132
   DockerMysqlConfigImage: 192.0.2.1:8787/rhosp13/openstack-mariadb:13.0-132
   DockerMysqlImage: 192.0.2.1:8787/rhosp13/openstack-mariadb:13.0-132
-  DockerNeutronApiImage: 192.0.2.1:8787/rhosp13/openstack-neutron-server:13.0-136
-  DockerNeutronConfigImage: 192.0.2.1:8787/rhosp13/openstack-neutron-server:13.0-136
+  DockerNeutronApiImage: 192.0.2.1:8787/rhosp13/openstack-neutron-server:13.0-136.1604501044
+  DockerNeutronConfigImage: 192.0.2.1:8787/rhosp13/openstack-neutron-server:13.0-136.1604501044
   DockerNeutronDHCPImage: 192.0.2.1:8787/rhosp13/openstack-neutron-dhcp-agent:13.0-137
   DockerNeutronL3AgentImage: 192.0.2.1:8787/rhosp13/openstack-neutron-l3-agent:13.0-136
   DockerNeutronMetadataImage: 192.0.2.1:8787/rhosp13/openstack-neutron-metadata-agent:13.0-137
   DockerNovaApiImage: 192.0.2.1:8787/rhosp13/openstack-nova-api:13.0-137
-  DockerNovaComputeImage: 192.0.2.1:8787/rhosp13/openstack-nova-compute:13.0-155
+  DockerNovaComputeImage: 192.0.2.1:8787/rhosp13/openstack-nova-compute:13.0-155.1604501591
   DockerNovaConductorImage: 192.0.2.1:8787/rhosp13/openstack-nova-conductor:13.0-136
   DockerNovaConfigImage: 192.0.2.1:8787/rhosp13/openstack-nova-api:13.0-137
   DockerNovaConsoleauthImage: 192.0.2.1:8787/rhosp13/openstack-nova-consoleauth:13.0-135
-  DockerNovaLibvirtConfigImage: 192.0.2.1:8787/rhosp13/openstack-nova-compute:13.0-155
-  DockerNovaLibvirtImage: 192.0.2.1:8787/rhosp13/openstack-nova-libvirt:13.0-164
+  DockerNovaLibvirtConfigImage: 192.0.2.1:8787/rhosp13/openstack-nova-compute:13.0-155.1604501591
+  DockerNovaLibvirtImage: 192.0.2.1:8787/rhosp13/openstack-nova-libvirt:13.0-164.1604509610
   DockerNovaMetadataImage: 192.0.2.1:8787/rhosp13/openstack-nova-api:13.0-137
   DockerNovaPlacementConfigImage: 192.0.2.1:8787/rhosp13/openstack-nova-placement-api:13.0-136
   DockerNovaPlacementImage: 192.0.2.1:8787/rhosp13/openstack-nova-placement-api:13.0-136
