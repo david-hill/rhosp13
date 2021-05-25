@@ -34,3 +34,16 @@ parameter_defaults:
       "bond_mode=balance-tcp lacp=active other-config:lacp-fallback-ab=true"
   NovaComputeExtraConfig:
     nova::compute::reserved_host_memory: 512
+  ComputeExtraConfig:
+      nova::compute::resume_guests_state_on_host_boot: true
+      nova::config::nova_config:
+          key_manager/fixed_key:
+              value: 'bae3516cc1c0eb18b05440eba8012a4a880a2ee04d584a9c1579445e675b12defdc716ec'
+                  
+  ControllerExtraConfig:
+      nova::config::nova_config:
+          key_manager/fixed_key:
+              value: 'bae3516cc1c0eb18b05440eba8012a4a880a2ee04d584a9c1579445e675b12defdc716ec'
+      cinder::config::cinder_config:
+          key_manager/fixed_key:
+              value: 'bae3516cc1c0eb18b05440eba8012a4a880a2ee04d584a9c1579445e675b12defdc716ec'
