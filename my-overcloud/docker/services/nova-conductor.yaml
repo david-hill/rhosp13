@@ -44,7 +44,12 @@ parameters:
     default: false
     description: Remove package if the service is being disabled during upgrade
     type: boolean
-
+  NovaEnableNUMALiveMigration:
+    default: false
+    description: Whether to enable or not the live migration for NUMA topology instances.
+    type: boolean
+    tags:
+      - role_specific
 
 resources:
 
@@ -70,6 +75,18 @@ resources:
       DockerNovaImage: {get_param: DockerNovaConductorImage}
       NovaServiceName: 'conductor'
 
+  RoleParametersValue:
+    type: OS::Heat::Value
+    properties:
+      type: json
+      value:
+        map_replace:
+          - map_replace:
+            - nova::workarounds::enable_numa_live_migration: NovaEnableNUMALiveMigration
+            - values: {get_param: [RoleParameters]}
+          - values:
+              NovaEnableNUMALiveMigration: {get_param: NovaEnableNUMALiveMigration}
+
 outputs:
   role_data:
     description: Role data for the Nova Conductor service.
@@ -79,6 +96,7 @@ outputs:
         map_merge:
           - {get_attr: [NovaConductorBase, role_data, config_settings]}
           - {get_attr: [NovaLogging, config_settings]}
+          - {get_attr: [RoleParametersValue, value]}
       logging_source: {get_attr: [NovaConductorBase, role_data, logging_source]}
       logging_groups: {get_attr: [NovaConductorBase, role_data, logging_groups]}
       service_config_settings: {get_attr: [NovaConductorBase, role_data, service_config_settings]}
@@ -116,7 +134,14 @@ outputs:
             privileged: false
             restart: always
             healthcheck:
-              test: /openstack/healthcheck
+              test:
+                list_join:
+                  - ' '
+                  - - '/openstack/healthcheck'
+                    - yaql:
+                        expression: str($.data.port)
+                        data:
+                          port: {get_attr: [NovaConductorBase, role_data, config_settings, 'nova::rabbit_port']}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -138,10 +163,6 @@ outputs:
             - name: Set fact nova_conductor_enabled
               set_fact:
                 nova_conductor_enabled: "{{ nova_conductor_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-nova-conductor is running"
-              command: systemctl is-active --quiet openstack-nova-conductor
-              tags: validation
-              when: nova_conductor_enabled|bool
         - when: step|int == 1
           block:
             - name: Set compute upgrade level to auto

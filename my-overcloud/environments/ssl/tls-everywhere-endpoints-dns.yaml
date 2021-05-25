@@ -34,7 +34,7 @@ parameter_defaults:
     Ec2ApiAdmin: {protocol: 'https', port: '8788', host: 'CLOUDNAME'}
     Ec2ApiInternal: {protocol: 'https', port: '8788', host: 'CLOUDNAME'}
     Ec2ApiPublic: {protocol: 'https', port: '13788', host: 'CLOUDNAME'}
-    GaneshaInternal: {protocol: 'nfs', port: '2049', host: 'CLOUDNAME'}
+    GaneshaInternal: {protocol: 'nfs', port: '2049', host: 'IP_ADDRESS'}
     GlanceAdmin: {protocol: 'https', port: '9292', host: 'CLOUDNAME'}
     GlanceInternal: {protocol: 'https', port: '9292', host: 'CLOUDNAME'}
     GlancePublic: {protocol: 'https', port: '13292', host: 'CLOUDNAME'}
@@ -76,8 +76,8 @@ parameter_defaults:
     NovaVNCProxyAdmin: {protocol: 'https', port: '6080', host: 'CLOUDNAME'}
     NovaVNCProxyInternal: {protocol: 'https', port: '6080', host: 'CLOUDNAME'}
     NovaVNCProxyPublic: {protocol: 'https', port: '13080', host: 'CLOUDNAME'}
-    OctaviaAdmin: {protocol: 'https', port: '9876', host: 'IP_ADDRESS'}
-    OctaviaInternal: {protocol: 'https', port: '9876', host: 'IP_ADDRESS'}
+    OctaviaAdmin: {protocol: 'https', port: '9876', host: 'CLOUDNAME'}
+    OctaviaInternal: {protocol: 'https', port: '9876', host: 'CLOUDNAME'}
     OctaviaPublic: {protocol: 'https', port: '13876', host: 'CLOUDNAME'}
     OpenDaylightAdmin: {protocol: 'https', port: '8081', host: 'CLOUDNAME'}
     OpenDaylightInternal: {protocol: 'https', port: '8081', host: 'CLOUDNAME'}

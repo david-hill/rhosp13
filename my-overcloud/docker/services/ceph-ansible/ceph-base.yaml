@@ -112,10 +112,15 @@ parameters:
   NovaRbdPoolName:
     default: vms
     type: string
+    description: The pool name for RBD backend ephemeral storage.
+    tags:
+      - role_specific
   CephClientKey:
     description: The Ceph client key. Can be created with ceph-authtool --gen-print-key.
     type: string
     hidden: true
+    constraints:
+    - allowed_pattern: "^[a-zA-Z0-9+/]{38}==$"
   CephClientUserName:
     default: openstack
     type: string
@@ -127,10 +132,27 @@ parameters:
                  with ceph-authtool --gen-print-key.
     type: string
     hidden: true
+    constraints:
+    - allowed_pattern: "^[a-zA-Z0-9+/]{38}==$"
   CephPoolDefaultSize:
     description: default minimum replication for RBD copies
     type: number
     default: 3
+  ManilaCephFSDataPoolName:
+    default: manila_data
+    type: string
+  ManilaCephFSMetadataPoolName:
+    default: manila_metadata
+    type: string
+  ManilaCephFSDataPoolPGNum:
+    default: 128
+    type: number
+  ManilaCephFSMetadataPoolPGNum:
+    default: 128
+    type: number
+  ManilaCephFSShareBackendName:
+    default: cephfs
+    type: string
   ManilaCephFSCephFSAuthId:
     default: manila
     type: string
@@ -139,6 +161,8 @@ parameters:
     description: The Ceph client key. Can be created with ceph-authtool --gen-print-key.
     type: string
     hidden: true
+    constraints:
+    - allowed_pattern: "^[a-zA-Z0-9+/]{38}==$"
   CephIPv6:
     default: False
     type: boolean
@@ -165,6 +189,10 @@ conditions:
       expression: $.data.split('/')[0].matches('(\.|:)')
   perform_upgrade:
     equals: [{get_param: StackUpdateType}, 'UPGRADE']
+  ceph_config_overrides_with_sections:
+    yaql:
+      data: {get_param: CephConfigOverrides}
+      expression: $.data.keys().any(predicate => $ in ['global', 'mon', 'mgr', 'osd', 'mds', 'client'])
 
 resources:
   DockerImageUrlParts:
@@ -192,6 +220,29 @@ resources:
           yaql:
             expression: $.data.rightSplit(':', 1)[1]
             data: {get_param: DockerCephDaemonImage}
+
+  DefaultCephConfigOverrides:
+    type: OS::Heat::Value
+    properties:
+      type: json
+      value:
+        global:
+          osd_pool_default_size: {get_param: CephPoolDefaultSize}
+          osd_pool_default_pg_num: {get_param: CephPoolDefaultPgNum}
+          osd_pool_default_pgp_num: {get_param: CephPoolDefaultPgNum}
+          rgw_keystone_api_version: 3
+          rgw_keystone_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+          rgw_keystone_accepted_roles: 'Member, admin'
+          rgw_keystone_accepted_admin_roles: ResellerAdmin, swiftoperator
+          rgw_keystone_admin_domain: default
+          rgw_keystone_admin_project: service
+          rgw_keystone_admin_user: swift
+          rgw_keystone_admin_password: {get_param: SwiftPassword}
+          rgw_keystone_implicit_tenants: 'true'
+          rgw_keystone_revocation_interval: '0'
+          rgw_s3_auth_use_keystone: 'true'
+          rgw_swift_versioning_enabled: 'true'
+          rgw_swift_account_in_url: 'true'
 
 outputs:
   role_data:
@@ -225,6 +276,7 @@ outputs:
           fsid: { get_param: CephClusterFSID }
           cluster: { get_param: CephClusterName }
           docker: true
+          configure_firewall: false
           ceph_docker_registry: {get_attr: [DockerImageUrlParts, value, host]}
           ceph_docker_image: {get_attr: [DockerImageUrlParts, value, image]}
           ceph_docker_image_tag: {get_attr: [DockerImageUrlParts, value, image_tag]}
@@ -252,7 +304,10 @@ outputs:
                           list_concat_unique:
                             - - {get_param: CinderRbdPoolName}
                               - {get_param: CinderBackupRbdPoolName}
-                              - {get_param: NovaRbdPoolName}
+                              - if:
+                                - equals: [{get_param: [RoleParameters, NovaRbdPoolName]}, '']
+                                - {get_param: NovaRbdPoolName}
+                                - {get_param: [RoleParameters, NovaRbdPoolName]}
                               - {get_param: GlanceRbdPoolName}
                             # CinderRbdExtraPools is a list (do not indent further)
                             - {get_param: CinderRbdExtraPools}
@@ -284,7 +339,10 @@ outputs:
                         list_concat_unique:
                         - - {get_param: CinderRbdPoolName}
                           - {get_param: CinderBackupRbdPoolName}
-                          - {get_param: NovaRbdPoolName}
+                          - if:
+                            - equals: [{get_param: [RoleParameters, NovaRbdPoolName]}, '']
+                            - {get_param: NovaRbdPoolName}
+                            - {get_param: [RoleParameters, NovaRbdPoolName]}
                           - {get_param: GlanceRbdPoolName}
                         - if:
                           - equals: [{get_param: GnocchiRbdPoolName}, '']
@@ -322,21 +380,18 @@ outputs:
           keys: *openstack_keys
           pools: []
           ceph_conf_overrides:
-            global:
-              map_merge:
-                - osd_pool_default_size: {get_param: CephPoolDefaultSize}
-                  osd_pool_default_pg_num: {get_param: CephPoolDefaultPgNum}
-                  osd_pool_default_pgp_num: {get_param: CephPoolDefaultPgNum}
-                  rgw_keystone_api_version: 3
-                  rgw_keystone_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
-                  rgw_keystone_accepted_roles: 'Member, admin'
-                  rgw_keystone_admin_domain: default
-                  rgw_keystone_admin_project: service
-                  rgw_keystone_admin_user: swift
-                  rgw_keystone_admin_password: {get_param: SwiftPassword}
-                  rgw_keystone_implicit_tenants: 'true'
-                  rgw_keystone_revocation_interval: '0'
-                  rgw_s3_auth_use_keystone: 'true'
+            if:
+            - ceph_config_overrides_with_sections
+            - yaql:
+                data:
+                  default:
+                    map_merge:
+                    - {get_attr: [DefaultCephConfigOverrides, value]}
+                  overrides: {get_param: CephConfigOverrides}
+                expression: $.data.default.mergeWith($.data.overrides)
+            - global:
+                map_merge:
+                - {get_attr: [DefaultCephConfigOverrides, value, global]}
                 - {get_param: CephConfigOverrides}
           ntp_service_enabled: false
           generate_fsid: false
@@ -345,3 +400,9 @@ outputs:
             - {get_param: CephIPv6}
             - ipv6
             - ipv4
+          cephfs_data: {get_param: ManilaCephFSDataPoolName}
+          cephfs_metadata: {get_param: ManilaCephFSMetadataPoolName}
+          cephfs: {get_param: ManilaCephFSShareBackendName}
+          cephfs_pools:
+          - { name: {get_param: ManilaCephFSDataPoolName}, pgs: {get_param: ManilaCephFSDataPoolPGNum} }
+          - { name: {get_param: ManilaCephFSMetadataPoolName}, pgs: {get_param: ManilaCephFSMetadataPoolPGNum} }

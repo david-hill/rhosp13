@@ -39,11 +39,16 @@ parameters:
   EnableInternalTLS:
     type: boolean
     default: false
+  NeutronMechanismDrivers:
+    default: 'openvswitch'
+    description: |
+        The mechanism drivers for the Neutron tenant network.
+    type: comma_delimited_list
 
 conditions:
 
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-
+  is_ovn_in_neutron_mechanism_driver: {contains: ['ovn', {get_param: NeutronMechanismDrivers}]}
 
 resources:
 
@@ -82,6 +87,11 @@ outputs:
         map_merge:
           - {get_attr: [OctaviaApiPuppetBase, role_data, config_settings]}
           - {get_attr: [OctaviaFlavor, role_data, config_settings]}
+          -
+            if:
+              - is_ovn_in_neutron_mechanism_driver
+              - octavia::api::provider_drivers: 'amphora: The Octavia Amphora driver.,octavia: Deprecated alias of the Octavia Amphora driver.,ovn: Octavia OVN driver.'
+              - {}
       logging_source: {get_attr: [OctaviaApiPuppetBase, role_data, logging_source]}
       logging_groups: {get_attr: [OctaviaApiPuppetBase, role_data, logging_groups]}
       service_config_settings: {get_attr: [OctaviaApiPuppetBase, role_data, service_config_settings]}
@@ -97,7 +107,7 @@ outputs:
         config_image: {get_param: DockerOctaviaConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/octavia_api.json:
-          command: /usr/bin/octavia-api --config-file /usr/share/octavia/octavia-dist.conf --config-file /etc/octavia/octavia.conf --log-file /var/log/octavia/api.log --config-dir /etc/octavia/conf.d/common --config-dir /etc/octavia/conf.d/octavia-api
+          command: /usr/sbin/httpd -DFOREGROUND
           config_files:
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
@@ -107,13 +117,23 @@ outputs:
             - path: /var/log/octavia
               owner: octavia:octavia
               recurse: true
-        /var/lib/kolla/config_files/octavia_api_tls_proxy.json:
-          command: /usr/sbin/httpd -DFOREGROUND
+            - path: /var/run/octavia
+              owner: octavia:octavia
+              recurse: true
+        /var/lib/kolla/config_files/octavia_driver_agent.json:
+          command: /usr/bin/octavia-driver-agent --config-file /usr/share/octavia/octavia-dist.conf --config-file /etc/octavia/octavia.conf --log-file /var/log/octavia/driver-agent.log --config-dir /etc/octavia/conf.d/common
           config_files:
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
               merge: true
               preserve_properties: true
+          permissions:
+            - path: /var/log/octavia
+              owner: octavia:octavia
+              recurse: true
+            - path: /var/run/octavia
+              owner: octavia:octavia
+              recurse: true
       docker_puppet_tasks:
         step_5:
           config_volume: octavia
@@ -165,6 +185,7 @@ outputs:
                 net: host
                 privileged: false
                 restart: always
+                user: root
                 healthcheck:
                   test: /openstack/healthcheck
                 volumes:
@@ -173,37 +194,52 @@ outputs:
                     -
                       - /var/lib/kolla/config_files/octavia_api.json:/var/lib/kolla/config_files/config.json:ro
                       - /var/lib/config-data/puppet-generated/octavia/:/var/lib/kolla/config_files/src:ro
-                      - /var/log/containers/octavia:/var/log/octavia
-                      - /var/log/containers/httpd/octavia-api:/var/log/httpd
+                      - /var/log/containers/octavia:/var/log/octavia:z
+                      - /var/run/octavia:/var/run/octavia:shared,z
+                      - /var/log/containers/httpd/octavia-api:/var/log/httpd:z
+                      -
+                        if:
+                          - internal_tls_enabled
+                          - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                          - ''
+                      -
+                        if:
+                          - internal_tls_enabled
+                          - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                          - ''
                 environment:
                   - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
             - if:
-                - internal_tls_enabled
-                - octavia_api_tls_proxy:
+                - is_ovn_in_neutron_mechanism_driver
+                - octavia_driver_agent:
                     start_order: 2
                     image: *octavia_api_image
                     net: host
-                    user: root
+                    privileged: true
                     restart: always
                     volumes:
                       list_concat:
                         - {get_attr: [ContainersCommon, volumes]}
                         -
-                          - /var/lib/kolla/config_files/octavia_api_tls_proxy.json:/var/lib/kolla/config_files/config.json:ro
+                          - /var/lib/kolla/config_files/octavia_driver_agent.json:/var/lib/kolla/config_files/config.json:ro
                           - /var/lib/config-data/puppet-generated/octavia/:/var/lib/kolla/config_files/src:ro
-                          - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                          - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                          - /var/log/containers/octavia:/var/log/octavia:z
+                          - /var/run/octavia:/var/run/octavia:shared,z
                     environment:
                       - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
                 - {}
+
       host_prep_tasks:
-        - name: create persistent logs directory
+        - name: create persistent directories
           file:
-            path: "{{ item }}"
+            path: "{{ item.path }}"
             state: directory
+            setype: "{{ item.setype }}"
           with_items:
-            - /var/log/containers/octavia
-            - /var/log/containers/httpd/octavia-api
+            - { 'path': /var/log/containers/octavia, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/containers/httpd/octavia-api, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/octavia, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/run/octavia, 'setype': svirt_sandbox_file_t, 'mode': '0755' }
         - name: octavia logs readme
           copy:
             dest: /var/log/octavia/readme.txt
@@ -211,7 +247,26 @@ outputs:
               Log files from octavia containers can be found under
               /var/log/containers/octavia and /var/log/containers/httpd/octavia-api.
           ignore_errors: true
+        - name: ensure /var/run/octavia is present upon reboot
+          copy:
+            dest: /etc/tmpfiles.d/var-run-octavia.conf
+            content: |
+              d /var/run/octavia 0755 root root - -
+      update_tasks:
+        - name: Set internal tls variable
+          set_fact:
+            internal_tls_enabled: {get_param: EnableInternalTLS}
+        - name: remove TLS proxy if configured and running
+          when:
+            - step|int == 2
+            - internal_tls_enabled|bool
+          docker_container:
+            name: octavia_api_tls_proxy
+            state: absent
       upgrade_tasks:
+        - name: Set internal tls variable
+          set_fact:
+            internal_tls_enabled: {get_param: EnableInternalTLS}
         - when: step|int == 0
           tags: common
           block:
@@ -229,10 +284,6 @@ outputs:
             - name: Set fact octavia_api_httpd_enabled
               set_fact:
                 octavia_api_httpd_enabled: "{{ octavia_api_httpd_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-octavia-api is running"
-              command: systemctl is-active --quiet openstack-octavia-api
-              tags: validation
-              when: octavia_api_enabled|bool
             - name: Check if httpd service is running
               command: systemctl is-active --quiet httpd
               ignore_errors: True
@@ -242,12 +293,6 @@ outputs:
               set_fact:
                 httpd_running: "{{ httpd_running_result.rc == 0 }}"
               when: httpd_running is undefined
-            - name: "PreUpgrade step0,validation: Check if octavia_api_cfn_wsgi is running"
-              tags: validation
-              when:
-                - octavia_api_httpd_enabled|bool
-                - httpd_running|bool
-              shell: systemctl status 'httpd' | grep -q 'octavia'
         - when: step|int == 2
           block:
             - name: Stop and disable octavia_api service
@@ -258,3 +303,10 @@ outputs:
                 - octavia_api_httpd_enabled|bool
                 - httpd_running|bool
               service: name=httpd state=stopped
+            - name: remove TLS proxy if configured and running
+              when: internal_tls_enabled|bool
+              docker_container:
+                name: octavia_api_tls_proxy
+                state: absent
+      metadata_settings:
+        get_attr: [OctaviaApiPuppetBase, role_data, metadata_settings]

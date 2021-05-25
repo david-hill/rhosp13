@@ -40,6 +40,20 @@ parameters:
     default: ""
     tags:
       - role_specific
+  OvsHandlerCores:
+    description: >
+      Number of cores to be used for ovs handler threads.
+    type: string
+    default: ""
+    tags:
+      - role_specific
+  OvsRevalidatorCores:
+    description: >
+      Number of cores to be used for ovs revalidator threads.
+    type: string
+    default: ""
+    tags:
+      - role_specific
   OvsDpdkMemoryChannels:
     description: Number of memory channels per socket to be used for DPDK
     type: string
@@ -81,6 +95,13 @@ parameters:
       - allowed_pattern: "[0-9,-]*"
     type: string
     default: ""
+    tags:
+      - role_specific
+  OvsDisableEMC:
+    default: false
+    description: |
+      Disable OVS Exact Match Cache.
+    type: boolean
     tags:
       - role_specific
   # DEPRECATED: the following options are deprecated and are currently maintained
@@ -142,6 +163,9 @@ outputs:
               vswitch::dpdk::pmd_core_list: OvsPmdCoreList
               vswitch::dpdk::memory_channels: OvsDpdkMemoryChannels
               vswitch::dpdk::socket_mem: OvsDpdkSocketMemory
+              vswitch::dpdk::disable_emc: OvsDisableEMC
+              vswitch::dpdk::revalidator_cores: OvsRevalidatorCores
+              vswitch::dpdk::handler_cores: OvsHandlerCores
             - values: {get_param: [RoleParameters]}
           - values:
               OvsDpdkCoreList: {if: [l_cores_empty, {get_param: HostCpusList}, {get_param: OvsDpdkCoreList}]}
@@ -149,46 +173,7 @@ outputs:
               OvsDpdkSocketMemory: {if: [socket_mem_empty, {get_param: NeutronDpdkSocketMemory}, {get_param: OvsDpdkSocketMemory}]}
               OvsDpdkDriverType: {if: [driver_not_set, {get_param: NeutronDpdkDriverType}, {get_param: OvsDpdkDriverType}]}
               OvsPmdCoreList: {if: [pmd_cores_empty, {get_param: NeutronDpdkCoreList}, {get_param: OvsPmdCoreList}]}
+              OvsDisableEMC: {get_param: OvsDisableEMC}
+              OvsRevalidatorCores: {get_param: OvsRevalidatorCores}
+              OvsHandlerCores: {get_param: OvsHandlerCores}
 
-      upgrade_tasks:
-        - name: Check openvswitch version.
-          when: step|int == 2
-          register: ovs_version
-          ignore_errors: true
-          shell: rpm -qa | awk -F- '/^openvswitch-2/{print $2 "-" $3}'
-        - name: Check openvswitch packaging.
-          when: step|int == 2
-          shell: rpm -q --scripts openvswitch | awk '/postuninstall/,/*/' | grep -q "systemctl.*try-restart"
-          register: ovs_packaging_issue
-          ignore_errors: true
-        - block:
-            - name: "Ensure empty directory: emptying."
-              file:
-                state: absent
-                path: /root/OVS_UPGRADE
-            - name: "Ensure empty directory: creating."
-              file:
-                state: directory
-                path: /root/OVS_UPGRADE
-                owner: root
-                group: root
-                mode: 0750
-            - name: Make yum cache.
-              command: yum makecache
-            - name: Download OVS packages.
-              command: yumdownloader --destdir /root/OVS_UPGRADE --resolve openvswitch
-            - name: Get rpm list for manual upgrade of OVS.
-              shell: ls -1 /root/OVS_UPGRADE/*.rpm
-              register: ovs_list_of_rpms
-            - name: Manual upgrade of OVS
-              shell: |
-                rpm -U --test {{item}} 2>&1 | grep "already installed" || \
-                rpm -U --replacepkgs --notriggerun --nopostun {{item}};
-              args:
-                chdir: /root/OVS_UPGRADE
-              with_items:
-                - "{{ovs_list_of_rpms.stdout_lines}}"
-          when:
-            - step|int == 2
-            - "'2.5.0-14' in ovs_version.stdout|default('') or
-              ovs_packaging_issue|default(false)|succeeded"

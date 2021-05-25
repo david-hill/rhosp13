@@ -102,15 +102,27 @@ outputs:
                   - /sys:/sys
                   - /lib/modules:/lib/modules:ro
                   - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
+                  - /var/lib/iscsi:/var/lib/iscsi
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
+        - name: ensure /etc/iscsi exists
+          file:
+            path: /etc/iscsi
+            state: directory
         - name: stat /lib/systemd/system/iscsid.socket
           stat: path=/lib/systemd/system/iscsid.socket
           register: stat_iscsid_socket
         - name: Stop and disable iscsid.socket service
           service: name=iscsid.socket state=stopped enabled=no
           when: stat_iscsid_socket.stat.exists
+        - name: Check if iscsi.service is enabled
+          command: systemctl is-enabled --quiet iscsi.service
+          ignore_errors: True
+          register: iscsi_service_enabled_result
+        - name: Stop iscsi.service
+          service: name=iscsi.service state=stopped enabled=no
+          when: iscsi_service_enabled_result.rc == 0
       upgrade_tasks:
         - when: step|int == 0
           tags: common
@@ -122,10 +134,6 @@ outputs:
             - name: Set fact iscsid_enabled
               set_fact:
                 iscsid_enabled: "{{ iscsid_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check if iscsid is running"
-              command: systemctl is-active --quiet iscsid
-              when: iscsid_enabled|bool
-              tags: validation
             - name: Check if iscsid.socket service is deployed
               command: systemctl is-enabled --quiet iscsid.socket
               ignore_errors: True
@@ -133,11 +141,65 @@ outputs:
             - name: Set fact iscsid_socket_enabled
               set_fact:
                 iscsid_socket_enabled: "{{ iscsid_socket_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check if iscsid.socket is running"
-              command: systemctl is-active --quiet iscsid.socket
-              when: iscsid_socket_enabled|bool
-              tags: validation
         - when: step|int == 2
+          block:
+            - name: Stop and disable iscsid service
+              when: iscsid_enabled|bool
+              service: name=iscsid state=stopped enabled=no
+            - name: Stop and disable iscsid.socket service
+              when: iscsid_socket_enabled|bool
+              service: name=iscsid.socket state=stopped enabled=no
+      fast_forward_upgrade_tasks:
+        - when:
+            - step|int == 0
+            - release == 'ocata'
+          block:
+            - name: FFU check if iscsid service is deployed
+              ignore_errors: True
+              command: systemctl is-enabled --quiet iscsid
+              register: iscsid_enabled_result
+            - name: Set fact iscsid_enabled
+              set_fact:
+                iscsid_enabled: "{{ iscsid_enabled_result.rc == 0 }}"
+            - name: FFU check if iscsid.socket service is deployed
+              command: systemctl is-enabled --quiet iscsid.socket
+              ignore_errors: True
+              register: iscsid_socket_enabled_result
+            - name: Set fact iscsid_socket_enabled
+              set_fact:
+                iscsid_socket_enabled: "{{ iscsid_socket_enabled_result.rc == 0 }}"
+        - when:
+            - step|int == 1
+            - release == 'ocata'
+          block:
+            - name: Stop and disable iscsid service
+              when: iscsid_enabled|bool
+              service: name=iscsid state=stopped enabled=no
+            - name: Stop and disable iscsid.socket service
+              when: iscsid_socket_enabled|bool
+              service: name=iscsid.socket state=stopped enabled=no
+      fast_forward_upgrade_tasks:
+        - when:
+            - step|int == 0
+            - release == 'ocata'
+          block:
+            - name: FFU check if iscsid service is deployed
+              ignore_errors: True
+              command: systemctl is-enabled --quiet iscsid
+              register: iscsid_enabled_result
+            - name: Set fact iscsid_enabled
+              set_fact:
+                iscsid_enabled: "{{ iscsid_enabled_result.rc == 0 }}"
+            - name: FFU check if iscsid.socket service is deployed
+              command: systemctl is-enabled --quiet iscsid.socket
+              ignore_errors: True
+              register: iscsid_socket_enabled_result
+            - name: Set fact iscsid_socket_enabled
+              set_fact:
+                iscsid_socket_enabled: "{{ iscsid_socket_enabled_result.rc == 0 }}"
+        - when:
+            - step|int == 1
+            - release == 'ocata'
           block:
             - name: Stop and disable iscsid service
               when: iscsid_enabled|bool

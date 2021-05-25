@@ -129,8 +129,26 @@ parameters:
     type: string
   NovaEnableRbdBackend:
     default: false
-    description: Whether to enable or not the Rbd backend for Nova
+    description: Whether to enable the Rbd backend for Nova ephemeral storage.
     type: boolean
+    tags:
+      - role_specific
+  GlanceShowMultipleLocations:
+    default: false
+    description: |
+      Whether to show multiple image locations e.g for copy-on-write support on
+      RBD or Netapp backends. Potential security risk, see glance.conf for more information.
+    type: boolean
+  GlanceImageImportPlugins:
+    default: ['no_op']
+    description: >
+      List of enabled Image Import Plugins. Valid values in the list are
+      'image_conversion', 'inject_metadata', 'no_op'.
+    type: comma_delimited_list
+  GlanceImageConversionOutputFormat:
+    default: 'raw'
+    description: Desired output format for image conversion plugin.
+    type: string
   GlanceEnabledImportMethods:
     default: 'web-download'
     description: >
@@ -191,14 +209,19 @@ conditions:
   use_tls_proxy: {equals : [{get_param: EnableInternalTLS}, true]}
   glance_workers_unset: {equals : [{get_param: GlanceWorkers}, '']}
   service_debug_unset: {equals : [{get_param: GlanceDebug}, '']}
+  cinder_backend_enabled: {equals: [{get_param: GlanceBackend}, cinder]}
   glance_multiple_locations:
-    and:
-    - equals:
-      - get_param: GlanceBackend
-      - rbd
-    - equals:
-      - get_param: NovaEnableRbdBackend
-      - true
+    or:
+    - {equals : [{get_param: GlanceShowMultipleLocations}, true]}
+    - and:
+      # Keep this for compat, but ignore NovaEnableRbdBackend if it's a role param
+      - equals:
+        - get_param: GlanceBackend
+        - rbd
+      - equals:
+        - get_param: NovaEnableRbdBackend
+        - true
+
 
 resources:
 
@@ -251,8 +274,8 @@ outputs:
                   - 9292
                   - 13292
             glance::api::authtoken::project_name: 'service'
-            glance::keystone::authtoken::user_domain_name: 'Default'
-            glance::keystone::authtoken::project_domain_name: 'Default'
+            glance::api::authtoken::user_domain_name: 'Default'
+            glance::api::authtoken::project_domain_name: 'Default'
             glance::api::pipeline: 'keystone'
             glance::api::show_image_direct_url: true
             glance::api::show_multiple_locations: {if: [glance_multiple_locations, true, false]}
@@ -260,6 +283,8 @@ outputs:
             glance::api::image_member_quota: {get_param: GlanceImageMemberQuota}
             glance::api::enabled_import_methods: {get_param: GlanceEnabledImportMethods}
             glance::api::node_staging_uri: {get_param: GlanceNodeStagingUri}
+            glance::api::image_import_plugins: {get_param: GlanceImageImportPlugins}
+            glance::api::image_conversion_output_format: {get_param: GlanceImageConversionOutputFormat}
             # NOTE: bind IP is found in hiera replacing the network name with the
             # local node IP for the given network; replacement examples
             # (eg. for internal_api):
@@ -267,7 +292,11 @@ outputs:
             # internal_api_uri -> [IP]
             # internal_api_subnet - > IP/CIDR
             tripleo::profile::base::glance::api::tls_proxy_bind_ip:
-              get_param: [ServiceNetMap, GlanceApiNetwork]
+              str_replace:
+                template:
+                  "%{hiera('$NETWORK')}"
+                params:
+                  $NETWORK: {get_param: [ServiceNetMap, GlanceApiNetwork]}
             tripleo::profile::base::glance::api::tls_proxy_fqdn:
               str_replace:
                 template:
@@ -281,8 +310,12 @@ outputs:
             glance::api::bind_host:
               if:
               - use_tls_proxy
-              - 'localhost'
-              - {get_param: [ServiceNetMap, GlanceApiNetwork]}
+              - "%{hiera('localhost_address')}"
+              - str_replace:
+                  template:
+                    "%{hiera('$NETWORK')}"
+                  params:
+                    $NETWORK: {get_param: [ServiceNetMap, GlanceApiNetwork]}
             glance_notifier_strategy: {get_param: GlanceNotifierStrategy}
             glance_log_file: {get_param: GlanceLogFile}
             glance::backend::swift::swift_store_auth_address: {get_param: [EndpointMap, KeystoneV3Internal, uri] }
@@ -312,6 +345,14 @@ outputs:
             - glance_workers_unset
             - {}
             - glance::api::workers: {get_param: GlanceWorkers}
+          -
+            if:
+            - cinder_backend_enabled
+            - glance::backend::cinder::cinder_store_auth_address: {get_param: [EndpointMap, KeystoneV3Internal, uri]}
+              glance::backend::cinder::cinder_store_project_name: 'service'
+              glance::backend::cinder::cinder_store_user_name: 'glance'
+              glance::backend::cinder::cinder_store_password: {get_param: GlancePassword}
+            - {}
       service_config_settings:
         fluentd:
           tripleo_fluentd_groups_glance_api:
@@ -400,3 +441,5 @@ outputs:
             - step|int == 1
             - glance_registry_enabled.rc == 0
           service: name=openstack-glance-registry state=stopped enabled=no
+      metadata_settings:
+        get_attr: [TLSProxyBase, role_data, metadata_settings]

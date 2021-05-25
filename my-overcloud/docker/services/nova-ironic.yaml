@@ -40,6 +40,10 @@ parameters:
     default: false
     description: Remove package if the service is being disabled during upgrade
     type: boolean
+  ConfigDownload:
+    default: false
+    description: Whether config-download method is used or not.
+    type: boolean
 
 resources:
 
@@ -69,12 +73,14 @@ resources:
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
+conditions:
+  config_download_not_enabled: {equals: [{get_param: ConfigDownload}, false]}
+
 outputs:
   role_data:
     description: Role data for the Nova Compute service.
     value:
       service_name: {get_attr: [NovaIronicBase, role_data, service_name]}
-      cellv2_discovery: true
       config_settings: {get_attr: [NovaIronicBase, role_data, config_settings]}
       logging_source: {get_attr: [NovaIronicBase, role_data, logging_source]}
       logging_groups: {get_attr: [NovaIronicBase, role_data, logging_groups]}
@@ -115,15 +121,23 @@ outputs:
               - /var/lib/nova:/var/lib/nova:shared
               - /var/lib/docker-config-scripts/:/docker-config-scripts/
             command: "/docker-config-scripts/nova_statedir_ownership.py"
-        step_5:
+        step_4:
           nova_compute:
+            start_order: 100 # After the ironic services
             image: *nova_ironic_image
             net: host
             privileged: true
             user: root
             restart: always
             healthcheck:
-              test: /openstack/healthcheck
+              test:
+                list_join:
+                  - ' '
+                  - - '/openstack/healthcheck'
+                    - yaql:
+                        expression: str($.data.port)
+                        data:
+                          port: {get_attr: [NovaIronicBase, role_data, config_settings, 'nova::rabbit_port']}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -133,18 +147,55 @@ outputs:
                   - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
                   - /run:/run
                   - /dev:/dev
+                  - /var/lib/iscsi:/var/lib/iscsi
                   - /var/lib/nova/:/var/lib/nova:shared
                   - /var/log/containers/nova:/var/log/nova
             environment:
              - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+          nova_wait_for_compute_service:
+            start_order: 101
+            image: *nova_ironic_image
+            net: host
+            detach: false
+            volumes:
+              list_concat:
+                - {get_attr: [ContainersCommon, volumes]}
+                -
+                  - /var/lib/config-data/nova/etc/my.cnf.d/:/etc/my.cnf.d/:ro
+                  - /var/lib/config-data/nova/etc/nova/:/etc/nova/:ro
+                  - /var/log/containers/nova:/var/log/nova
+                  - /var/lib/docker-config-scripts/:/docker-config-scripts/
+            user: root
+            command: "/docker-config-scripts/nova_wait_for_compute_service.py"
+      workflow_tasks:
+        if:
+          - config_download_not_enabled
+          -
+            step5:
+              # Discover hosts via workflow _ONLY_ for non config-download deploy method
+              # that we also run it when:
+              # - nodes get blacklisted
+              # - deployment is run with skip-deploy-identifier
+              # For config-download method we use bellow deploy_steps_tasks
+              - name: nova_compute_discovery_workflow
+                workflow: 'tripleo.nova.v1.cellv2_discovery'
+                input:
+                  nova_host_discovery_service: 'nova_compute'
+                  nova_host_discovery_container: 'nova_compute'
+                  nova_host_discovery_ansible_playbook: '/usr/share/tripleo-common/playbooks/nova_cellv2_host_discover.yaml'
+          - {}
+      # deploy_steps_tasks only run in queens when config-download is used
+      deploy_steps_tasks: {get_attr: [NovaComputeCommon, nova_compute_common_deploy_steps_tasks]}
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item }}"
+            path: "{{ item.path }}"
             state: directory
+            setype: "{{ item.setype }}"
           with_items:
-            - /var/log/containers/nova
-            - /var/lib/nova
+            - { 'path': /var/log/containers/nova, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/lib/nova, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/nova, 'setype': svirt_sandbox_file_t }
         - name: nova logs readme
           copy:
             dest: /var/log/nova/readme.txt
@@ -163,10 +214,6 @@ outputs:
             - name: Set fact nova_ironic_enabled
               set_fact:
                 nova_ironic_enabled: "{{ nova_ironic_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-nova-compute is running"
-              command: systemctl is-active --quiet openstack-nova-compute
-              tags: validation
-              when: nova_ironic_enabled|bool
         - when: step|int == 2
           block:
             - name: Stop and disable nova-compute service

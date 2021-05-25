@@ -55,6 +55,11 @@ parameters:
     description: |
         Whether to create cron job for purging soft deleted rows in Nova database.
     type: boolean
+  NovaEnableDBArchive:
+    default: true
+    description: |
+        Whether to create cron job for archiving soft deleted rows in Nova database.
+    type: boolean
   MonitoringSubscriptionNovaApi:
     default: 'overcloud-nova-api'
     type: string
@@ -167,12 +172,17 @@ outputs:
           nova_wsgi_enabled: true
           nova::api::service_name: 'httpd'
           nova::wsgi::apache_api::ssl: {get_param: EnableInternalTLS}
-          # NOTE: bind IP is found in Heat replacing the network name with the local node IP
+          # NOTE: bind IP is found in hiera replacing the network name with the local node IP
           # for the given network; replacement examples (eg. for internal_api):
           # internal_api -> IP
           # internal_api_uri -> [IP]
           # internal_api_subnet - > IP/CIDR
-          nova::wsgi::apache_api::bind_host: {get_param: [ServiceNetMap, NovaApiNetwork]}
+          nova::wsgi::apache_api::bind_host:
+            str_replace:
+              template:
+                "%{hiera('$NETWORK')}"
+              params:
+                $NETWORK: {get_param: [ServiceNetMap, NovaApiNetwork]}
           nova::wsgi::apache_api::servername:
             str_replace:
               template:
@@ -187,6 +197,7 @@ outputs:
           nova::cron::archive_deleted_rows::monthday: {get_param: NovaCronDBArchivedMonthday}
           nova::cron::archive_deleted_rows::month: {get_param: NovaCronDBArchivedMonth}
           nova::cron::archive_deleted_rows::weekday: {get_param: NovaCronDBArchivedWeekday}
+          nova_enable_db_archive: {get_param: NovaEnableDBArchive}
           nova::policy::policies: {get_param: NovaApiPolicies}
         -
           if:
@@ -279,14 +290,22 @@ outputs:
               when:
                 - step|int == 5
                 - is_bootstrap_node|bool
-              shell: nova-manage cell_v2 map_cell0 --database_connection=$(hiera nova::cell0_database_connection)
+              shell:
+                str_replace:
+                  template: nova-manage cell_v2 map_cell0 --database_connection='CELL'
+                  params:
+                    CELL: {get_attr: [NovaBase, role_data, config_settings, "nova::cell0_database_connection"]}
             - name: Setup cell_v2 (create default cell)
               when:
                 - step|int == 5
                 - is_bootstrap_node|bool
               # (owalsh) puppet-nova expects the cell name 'default'
               # (owalsh) pass the db uri explicitly to avoid https://bugs.launchpad.net/tripleo/+bug/1662344
-              shell: nova-manage cell_v2 create_cell --name='default' --database_connection=$(hiera nova::database_connection)
+              shell:
+                str_replace:
+                  template: nova-manage cell_v2 create_cell --name='default' --database_connection='CELL'
+                  params:
+                    CELL: {get_attr: [NovaBase, role_data, config_settings, "nova::database_connection"]}
               register: nova_api_create_cell
               failed_when: nova_api_create_cell.rc not in [0,2]
               changed_when: nova_api_create_cell.rc == 0

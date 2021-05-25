@@ -102,13 +102,18 @@ outputs:
                     - {get_param: [DefaultPasswords, mysql_root_password]}
             mysql_clustercheck_password: {get_param: MysqlClustercheckPassword}
             enable_galera: {get_param: EnableGalera}
-            # NOTE: bind IP is found in Heat replacing the network name with the
+            # NOTE: bind IP is found in hiera replacing the network name with the
             # local node IP for the given network; replacement examples
             # (eg. for internal_api):
             # internal_api -> IP
             # internal_api_uri -> [IP]
             # internal_api_subnet - > IP/CIDR
-            mysql_bind_host: {get_param: [ServiceNetMap, MysqlNetwork]}
+            mysql_bind_host:
+              str_replace:
+                template:
+                  "%{hiera('$NETWORK')}"
+                params:
+                  $NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
             tripleo::profile::base::database::mysql::bind_address:
               str_replace:
                 template:
@@ -116,7 +121,11 @@ outputs:
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
             tripleo::profile::base::database::mysql::client_bind_address:
-              {get_param: [ServiceNetMap, MysqlNetwork]}
+              str_replace:
+                template:
+                  "%{hiera('$NETWORK')}"
+                params:
+                  $NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
             tripleo::profile::base::database::mysql::generate_dropin_file_limit:
               {get_param: MysqlIncreaseFileLimit}
           - if:
@@ -128,7 +137,7 @@ outputs:
                 service_key: '/etc/pki/tls/private/mysql.key'
                 hostname:
                   str_replace:
-                    template: "%{hiera('cloud_name_NETWORK')}"
+                    template: "%{hiera('fqdn_NETWORK')}"
                     params:
                       NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
                 dnsnames:
@@ -138,12 +147,12 @@ outputs:
                         NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
                   - str_replace:
                       template:
-                        "%{hiera('fqdn_$NETWORK')}"
+                        "%{hiera('fqdn_NETWORK')}"
                       params:
-                        $NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
+                        NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
                 principal:
                   str_replace:
-                    template: "mysql/%{hiera('cloud_name_NETWORK')}"
+                    template: "mysql/%{hiera('fqdn_NETWORK')}"
                     params:
                       NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
             - {}
@@ -175,9 +184,11 @@ outputs:
           mysql_db:
             name: nova_cell0
             state: present
+            login_unix_socket: '/var/lib/mysql/mysql.sock'
         - name: Setup cell_v2 (grant access to the nova DB user)
           when: step|int == 4
           mysql_user:
+            login_unix_socket: '/var/lib/mysql/mysql.sock'
             str_replace:
               template: "name=nova password=PASSWORD host=\"%\" priv=\"nova.*:ALL/nova_cell0.*:ALL,GRANT\" state=present"
               params:

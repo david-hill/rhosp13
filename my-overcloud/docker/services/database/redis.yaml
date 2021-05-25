@@ -68,6 +68,52 @@ outputs:
           - redis::daemonize: false
             tripleo::stunnel::manage_service: false
             tripleo::stunnel::foreground: 'yes'
+          - tripleo::redis::firewall_rules:
+              '108 redis':
+                dport:
+                  - 6379
+                  - 26379
+            tripleo::profile::base::database::redis::tls_proxy_bind_ip:
+              str_replace:
+                template:
+                  "%{hiera('$NETWORK')}"
+                params:
+                  $NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
+            tripleo::profile::base::database::redis::tls_proxy_fqdn:
+              str_replace:
+                template:
+                  "%{hiera('fqdn_$NETWORK')}"
+                params:
+                  $NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
+            tripleo::profile::base::database::redis::tls_proxy_port: 6379
+          - if:
+            - internal_tls_enabled
+            - tripleo::redis::service_certificate: '/etc/pki/tls/certs/redis.crt'
+              redis_certificate_specs:
+                service_certificate: '/etc/pki/tls/certs/redis.crt'
+                service_key: '/etc/pki/tls/private/redis.key'
+                hostname:
+                  str_replace:
+                    template: "%{hiera('fqdn_NETWORK')}"
+                    params:
+                      NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
+                dnsnames:
+                  - str_replace:
+                      template: "%{hiera('cloud_name_NETWORK')}"
+                      params:
+                        NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
+                  - str_replace:
+                      template:
+                        "%{hiera('fqdn_NETWORK')}"
+                      params:
+                        NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
+                principal:
+                  str_replace:
+                    template: "redis/%{hiera('fqdn_NETWORK')}"
+                    params:
+                      NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
+                postsave_cmd: "/usr/bin/certmonger-redis-refresh.sh"
+            - {}
       logging_source: {get_attr: [RedisBase, role_data, logging_source]}
       logging_groups: {get_attr: [RedisBase, role_data, logging_groups]}
       service_config_settings: {get_attr: [RedisBase, role_data, service_config_settings]}
@@ -157,9 +203,11 @@ outputs:
           file:
             path: "{{ item }}"
             state: directory
+            setype: "{{ item.setype }}"
           with_items:
-            - /var/log/containers/redis
-            - /var/run/redis
+            - { 'path': /var/log/containers/redis, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/run/redis, 'setype': container_var_run_t }
+            - { 'path': /var/log/redis, 'setype': svirt_sandbox_file_t }
         - name: redis logs readme
           copy:
             dest: /var/log/redis/readme.txt
@@ -167,6 +215,25 @@ outputs:
               Log files from redis containers can be found under
               /var/log/containers/redis.
           ignore_errors: true
+      update_tasks:
+        - when: step|int == 0
+          tags: common
+          block:
+            - name: Check if redis is  deployed
+              command: systemctl is-enabled --quiet redis
+              ignore_errors: True
+              register: redis_enabled_result
+            - name: Set fact redis_enabled
+              set_fact:
+                redis_enabled: "{{ redis_enabled_result.rc == 0 }}"
+        - when: step|int == 1
+          tags: common
+          block:
+            - name: Ensure redis is uninstalled on container host
+              when: redis_enabled|bool == false
+              package:
+                name: redis
+                state: absent
       upgrade_tasks:
         - when: step|int == 0
           tags: common
@@ -178,12 +245,13 @@ outputs:
             - name: Set fact redis_enabled
               set_fact:
                 redis_enabled: "{{ redis_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check if redis is running"
-              command: systemctl is-active --quiet redis
-              when: redis_enabled|bool
-              tags: validation
-        - when: step|int == 2
+        - when:
+            - step|int == 2
+            - redis_enabled|bool
           block:
             - name: Stop and disable redis service
-              when: redis_enabled|bool
               service: name=redis state=stopped enabled=no
+            - name: Ensure redis is uninstalled on container host
+              package:
+                name: redis
+                state: absent

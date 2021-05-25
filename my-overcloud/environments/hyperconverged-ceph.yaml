@@ -28,6 +28,7 @@ parameter_defaults:
     - OS::TripleO::Services::NeutronBgpVpnBagpipe
     - OS::TripleO::Services::NovaCompute
     - OS::TripleO::Services::NovaLibvirt
+    - OS::TripleO::Services::NovaLibvirtGuests
     - OS::TripleO::Services::NovaMigrationTarget
     - OS::TripleO::Services::Kernel
     - OS::TripleO::Services::ComputeNeutronCorePlugin
@@ -43,9 +44,11 @@ parameter_defaults:
     - OS::TripleO::Services::SensuClient
     - OS::TripleO::Services::SkydiveAgent
     - OS::TripleO::Services::Fluentd
+    - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::AuditD
     - OS::TripleO::Services::Collectd
+    - OS::TripleO::Services::MetricsQdr
     - OS::TripleO::Services::CephOSD
     - OS::TripleO::Services::Vpp
     - OS::TripleO::Services::NeutronVppAgent

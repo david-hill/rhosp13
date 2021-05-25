@@ -33,13 +33,22 @@ parameters:
   NeutronWorkers:
     default: ''
     description: |
-      Sets the number of API and RPC workers for the Neutron service.
+      Sets the number of API workers for the Neutron service.
       The default value results in the configuration being left unset
       and a system-dependent default will be chosen (usually the number
       of processors). Please note that this can result in a large number
       of processes and memory consumption on systems with a large core
       count. On such systems it is recommended that a non-default value
       be selected that matches the load requirements.
+    type: string
+  NeutronRpcWorkers:
+    default: ''
+    description: |
+      Sets the number of RPC workers for the Neutron service.
+      If not specified, it'll take the value of NeutronWorkers and if this is
+      not specified either, the default value results in the configuration
+      being left unset and a system-dependent default will be chosen
+      (usually 1).
     type: string
   NeutronPassword:
     description: The password for the neutron service and db account, used by neutron agents.
@@ -108,6 +117,7 @@ parameter_groups:
 conditions:
   use_tls_proxy: {equals : [{get_param: EnableInternalTLS}, true]}
   neutron_workers_unset: {equals : [{get_param: NeutronWorkers}, '']}
+  neutron_rpc_workers_unset: {equals : [{get_param: NeutronRpcWorkers}, '']}
   neutron_ovs_int_br_unset: {equals : [{get_param: NeutronOvsIntegrationBridge}, '']}
 
 resources:
@@ -175,13 +185,17 @@ outputs:
                   - 13696
             neutron::server::router_distributed: {get_param: NeutronEnableDVR}
             neutron::server::enable_dvr: {get_param: NeutronEnableDVR}
-            # NOTE: bind IP is found in Heat replacing the network name with the local node IP
+            # NOTE: bind IP is found in hiera replacing the network name with the local node IP
             # for the given network; replacement examples (eg. for internal_api):
             # internal_api -> IP
             # internal_api_uri -> [IP]
             # internal_api_subnet - > IP/CIDR
             tripleo::profile::base::neutron::server::tls_proxy_bind_ip:
-              get_param: [ServiceNetMap, NeutronApiNetwork]
+              str_replace:
+                template:
+                  "%{hiera('$NETWORK')}"
+                params:
+                  $NETWORK: {get_param: [ServiceNetMap, NeutronApiNetwork]}
             tripleo::profile::base::neutron::server::tls_proxy_fqdn:
               str_replace:
                 template:
@@ -195,15 +209,27 @@ outputs:
             neutron::bind_host:
               if:
               - use_tls_proxy
-              - 'localhost'
-              - {get_param: [ServiceNetMap, NeutronApiNetwork]}
+              - "%{hiera('localhost_address')}"
+              - str_replace:
+                  template:
+                    "%{hiera('$NETWORK')}"
+                  params:
+                    $NETWORK: {get_param: [ServiceNetMap, NeutronApiNetwork]}
             tripleo::profile::base::neutron::server::l3_ha_override: {get_param: NeutronL3HA}
           -
             if:
             - neutron_workers_unset
             - {}
             - neutron::server::api_workers: {get_param: NeutronWorkers}
-              neutron::server::rpc_workers: {get_param: NeutronWorkers}
+          -
+            if:
+            - neutron_rpc_workers_unset
+            -
+              if:
+              - neutron_workers_unset
+              - {}
+              - neutron::server::rpc_workers: {get_param: NeutronWorkers}
+            - neutron::server::rpc_workers: {get_param: NeutronRpcWorkers}
           -
             if:
             - neutron_ovs_int_br_unset
@@ -232,6 +258,16 @@ outputs:
           neutron::db::mysql::allowed_hosts:
             - '%'
             - "%{hiera('mysql_bind_host')}"
+        placement:
+          neutron::server::placement::auth_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+          neutron::server::placement::project_domain_name: 'Default'
+          neutron::server::placement::project_name: 'service'
+          neutron::server::placement::user_domain_name: 'Default'
+          neutron::server::placement::password: {get_param: NovaPassword}
+          neutron::server::placement::username: nova
+          neutron::server::placement::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+          neutron::server::placement::auth_type: 'password'
+          neutron::server::placement::region_name: {get_param: KeystoneRegion}
       upgrade_tasks:
         - name: Check if neutron_server is deployed
           command: systemctl is-enabled neutron-server

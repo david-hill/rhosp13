@@ -118,7 +118,7 @@ outputs:
                   volumes:
                     - /var/log/containers/zaqar:/var/log/zaqar
                     - /var/log/containers/httpd/zaqar:/var/log/httpd
-                  command: ['/bin/bash', '-c', 'chown -R zaqar:zaqar /var/log/zaqar']
+                  command: ['/bin/bash', '-c', 'chmod 2755 /var/log/zaqar; touch /var/log/zaqar/zaqar-server.log; chown -R zaqar:zaqar /var/log/zaqar']
               step_3:
                 zaqar_db_sync:
                   image: *zaqar_image
@@ -180,13 +180,15 @@ outputs:
                 environment:
                   - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent logs directory
+        - name: create persistent directories
           file:
-            path: "{{ item }}"
+            path: "{{ item.path }}"
+            setype: "{{ item.setype }}"
             state: directory
           with_items:
-            - /var/log/containers/zaqar
-            - /var/log/containers/httpd/zaqar
+            - { 'path': /var/log/containers/zaqar, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/containers/httpd/zaqar, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/zaqar, 'setype': svirt_sandbox_file_t }
         - name: zaqar logs readme
           copy:
             dest: /var/log/zaqar/readme.txt
@@ -212,12 +214,6 @@ outputs:
             - set_fact:
                 httpd_running: "{{ httpd_running_result.rc == 0 }}"
               when: httpd_running is undefined
-            - name: "PreUpgrade step0,validation: Check if zaqar_wsgi is running"
-              shell: systemctl status 'httpd' | grep -q zaqar_wsgi
-              tags: validation
-              when:
-                - zaqar_httpd_enabled|bool
-                - httpd_running|bool
         - name: Stop and disable zaqar service
           when:
             - step|int == 2

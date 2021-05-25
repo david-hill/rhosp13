@@ -4,6 +4,7 @@ resource_registry:
   OS::TripleO::PostDeploySteps: common/post.yaml
   OS::TripleO::AllNodes::SoftwareConfig: puppet/all-nodes-config.yaml
   OS::TripleO::AllNodesDeployment: OS::Heat::StructuredDeployments
+  OS::TripleO::HostPrepDeployment: OS::Heat::SoftwareDeploymentGroup
   OS::TripleO::Hosts::SoftwareConfig: hosts-config.yaml
   OS::TripleO::Ssh::HostPubKey: extraconfig/tasks/ssh/host_public_key.yaml
   OS::TripleO::Ssh::KnownHostsConfig: extraconfig/tasks/ssh/known_hosts_config.yaml
@@ -14,6 +15,8 @@ resource_registry:
   # Tasks (for internal TripleO usage)
   OS::TripleO::Tasks::UpdateWorkflow: OS::Heat::None
   OS::TripleO::Tasks::PackageUpdate: extraconfig/tasks/yum_update.yaml
+  # stable/queens fix to enabled PreNetworkConfig via heat
+  OS::TripleO::Reboot::SoftwareDeployment: OS::TripleO::SoftwareDeployment
 
 {% for role in roles %}
   OS::TripleO::{{role.name}}::PreNetworkConfig: OS::Heat::None
@@ -40,7 +43,9 @@ resource_registry:
   # in the jinja loop
   OS::TripleO::Controller::Net::SoftwareConfig: net-config-bridge.yaml
 
-  OS::TripleO::ServiceServerMetadataHook: OS::Heat::None
+{% for role in roles %}
+  OS::TripleO::{{role.name}}ServiceServerMetadataHook: OS::Heat::None
+{%- endfor %}
 
   OS::TripleO::Server: OS::Nova::Server
 {% for role in roles %}
@@ -50,6 +55,10 @@ resource_registry:
   # This creates the "heat-admin" user for all OS images by default
   # To disable, replace with firstboot/userdata_default.yaml
   OS::TripleO::NodeAdminUserData: firstboot/userdata_heat_admin.yaml
+
+  # This bootstraps the timesync configuration for any subsequent deployment
+  # operations. To disable, replace with firstboot/userdata_default.yaml
+  OS::TripleO::NodeTimesyncUserData: firstboot/userdata_timesync.yaml
 
   # Hooks for operator extra config
   # NodeUserData == Cloud-init additional user-data, e.g cloud-config
@@ -109,7 +118,9 @@ resource_registry:
   OS::TripleO::WorkflowSteps: OS::Mistral::ExternalResource
 
   # services
-  OS::TripleO::Services: common/services.yaml
+{%- for role in roles %}
+  OS::TripleO::{{role.name}}Services: common/services/{{role.name.lower()}}-role.yaml
+{%- endfor %}
   OS::TripleO::Services::Aide: OS::Heat::None
   OS::TripleO::Services::Apache: puppet/services/apache.yaml
   OS::TripleO::Services::CACerts: puppet/services/ca-certs.yaml
@@ -168,12 +179,13 @@ resource_registry:
   OS::TripleO::Services::NeutronCorePluginPlumgrid: puppet/services/neutron-plugin-plumgrid.yaml
   OS::TripleO::Services::NeutronCorePluginNuage: puppet/services/neutron-plugin-nuage.yaml
   OS::TripleO::Services::NeutronCorePluginML2Nuage: puppet/services/neutron-plugin-ml2-nuage.yaml
-  OS::TripleO::Services::NeutronCorePluginNSX: puppet/services/neutron-plugin-nsx.yaml
+  OS::TripleO::Services::NeutronCorePluginNSX: docker/services/neutron-plugin-nsx.yaml
   OS::TripleO::Services::OVNDBs: OS::Heat::None
   OS::TripleO::Services::OVNController: OS::Heat::None
 
   OS::TripleO::Services::NeutronCorePluginMidonet: puppet/services/neutron-midonet.yaml
   OS::TripleO::Services::NeutronCorePluginVTS: docker/services/neutron-plugin-ml2-cisco-vts.yaml
+  OS::TripleO::Services::NeutronCorePluginML2Ansible: docker/services/neutron-plugin-ml2-ansible.yaml
   OS::TripleO::Services::NeutronOvsAgent: docker/services/neutron-ovs-agent.yaml
   OS::TripleO::Services::NeutronLinuxbridgeAgent: OS::Heat::None
   OS::TripleO::Services::ComputeNeutronOvsAgent: docker/services/neutron-ovs-agent.yaml
@@ -202,6 +214,7 @@ resource_registry:
   OS::TripleO::Services::NovaConductor: docker/services/nova-conductor.yaml
   OS::TripleO::Services::NovaConsoleauth: docker/services/nova-consoleauth.yaml
   OS::TripleO::Services::NovaLibvirt: docker/services/nova-libvirt.yaml
+  OS::TripleO::Services::NovaLibvirtGuests: puppet/services/nova-libvirt-guests.yaml
   OS::TripleO::Services::NovaMetadata: docker/services/nova-metadata.yaml
   OS::TripleO::Services::NovaMigrationTarget: docker/services/nova-migration-target.yaml
   OS::TripleO::Services::NovaPlacement: docker/services/nova-placement.yaml
@@ -250,6 +263,7 @@ resource_registry:
 
   # Services that are disabled by default (use relevant environment files):
   OS::TripleO::Services::Fluentd: OS::Heat::None
+  OS::TripleO::Services::IpaClient: OS::Heat::None
   OS::TripleO::Services::Ipsec: OS::Heat::None
   OS::TripleO::Services::Rhsm: OS::Heat::None
   OS::TripleO::Services::Collectd: OS::Heat::None
@@ -280,6 +294,7 @@ resource_registry:
   OS::TripleO::Services::UndercloudAodhListener: OS::Heat::None
   OS::TripleO::Services::PankoApi: docker/services/panko-api.yaml
   OS::TripleO::Services::UndercloudPankoApi: OS::Heat::None
+  OS::TripleO::Services::MetricsQdr: OS::Heat::None
   OS::TripleO::Services::MistralEngine: OS::Heat::None
   OS::TripleO::Services::MistralApi: OS::Heat::None
   OS::TripleO::Services::MistralExecutor: OS::Heat::None
@@ -288,6 +303,7 @@ resource_registry:
   OS::TripleO::Services::IronicConductor: OS::Heat::None
   OS::TripleO::Services::IronicInspector: OS::Heat::None
   OS::TripleO::Services::IronicPxe: OS::Heat::None
+  OS::TripleO::Services::IronicNeutronAgent: OS::Heat::None
   OS::TripleO::Services::NovaIronic: OS::Heat::None
   OS::TripleO::Services::TripleoPackages: puppet/services/tripleo-packages.yaml
   OS::TripleO::Services::TripleoFirewall: puppet/services/tripleo-firewall.yaml
@@ -305,6 +321,7 @@ resource_registry:
   OS::TripleO::Services::CinderBackendDellEMCVNX: OS::Heat::None
   OS::TripleO::Services::CinderBackendDellEMCXTREMIOISCSI: OS::Heat::None
   OS::TripleO::Services::CinderBackendNetApp: OS::Heat::None
+  OS::TripleO::Services::CinderBackendPure: OS::Heat::None
   OS::TripleO::Services::CinderBackendScaleIO: OS::Heat::None
   OS::TripleO::Services::CinderBackendVRTSHyperScale: OS::Heat::None
   OS::TripleO::Services::CinderHPELeftHandISCSI: OS::Heat::None
@@ -339,6 +356,7 @@ resource_registry:
   OS::TripleO::Services::Multipathd: docker/services/multipathd.yaml
 
   # Logging
+  OS::TripleO::Services::Tmpwatch: extraconfig/services/tmpwatch-install.yaml
   OS::TripleO::Services::Logging::BarbicanApi: docker/services/logging/files/barbican-api.yaml
   OS::TripleO::Services::Logging::GlanceApi: docker/services/logging/files/glance-api.yaml
   OS::TripleO::Services::Logging::HAProxy: docker/services/logging/files/haproxy.yaml
@@ -353,6 +371,9 @@ resource_registry:
   OS::TripleO::Services::Logging::NovaLibvirt: OS::Heat::None
   OS::TripleO::Services::Logging::NovaPlacement: docker/services/logging/files/nova-placement.yaml
   OS::TripleO::Services::Logging::PankoApi: docker/services/logging/files/panko-api.yaml
+
+  # stable/queens fix to disable BootParams service (required for config-download)
+  OS::TripleO::Services::BootParams: OS::Heat::None
 
 parameter_defaults:
   EnablePackageInstall: false

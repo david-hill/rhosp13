@@ -60,6 +60,7 @@ resources:
       type: ../../puppet/services/aodh-api.yaml
       properties:
         EndpointMap: {get_param: EndpointMap}
+        ServiceData: {get_param: ServiceData}
         ServiceNetMap: {get_param: ServiceNetMap}
         DefaultPasswords: {get_param: DefaultPasswords}
         RoleName: {get_param: RoleName}
@@ -154,13 +155,15 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-      - name: create persistent logs directory
+      - name: create persistent directories
         file:
-          path: "{{ item }}"
+          path: "{{ item.path }}"
           state: directory
+          setype: "{{ item.setype }}"
         with_items:
-          - /var/log/containers/aodh
-          - /var/log/containers/httpd/aodh-api
+          - { 'path': /var/log/containers/aodh, 'setype': svirt_sandbox_file_t }
+          - { 'path': /var/log/containers/httpd/aodh-api, setype: svirt_sandbox_file_t }
+          - { 'path': /var/log/aodh, setype: svirt_sandbox_file_t }
       - name: aodh logs readme
         copy:
           dest: /var/log/aodh/readme.txt
@@ -188,12 +191,6 @@ outputs:
               set_fact:
                 httpd_running: "{{ httpd_running_result.rc == 0 }}"
               when:  httpd_running is undefined
-            - name: "PreUpgrade step0,validation: Check if aodh api is running"
-              shell: systemctl status 'httpd' | grep -q aodh
-              tags: validation
-              when:
-                - aodh_httpd_enabled|bool
-                - httpd_running|bool
         - when: step|int == 2
           block:
             - name: Stop and disable aodh service (running under httpd)

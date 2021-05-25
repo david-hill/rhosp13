@@ -60,11 +60,13 @@ outputs:
     value:
       - name: create persistent directories
         file:
-          path: "{{ item }}"
+          path: "{{ item.path }}"
           state: directory
+          setype: "{{ item.setype }}"
         with_items:
-          - /var/log/containers/cinder
-          - /var/lib/cinder
+          - { 'path': /var/log/containers/cinder, 'setype': svirt_sandbox_file_t }
+          - { 'path': /var/lib/cinder, 'setype': svirt_sandbox_file_t }
+          - { 'path': /var/log/cinder, 'setype': svirt_sandbox_file_t }
       - name: cinder logs readme
         copy:
           dest: /var/log/cinder/readme.txt
@@ -145,6 +147,7 @@ outputs:
           - /run/:/run/
           - /sys:/sys
           - /var/lib/cinder:/var/lib/cinder
+          - /var/lib/iscsi:/var/lib/iscsi
           - /var/log/containers/cinder:/var/log/cinder
 
   cinder_volume_environment:
@@ -170,6 +173,7 @@ outputs:
           - /sys:/sys
           - /lib/modules:/lib/modules:ro
           - /var/lib/cinder:/var/lib/cinder
+          - /var/lib/iscsi:/var/lib/iscsi
           - /var/log/containers/cinder:/var/log/cinder
 
   cinder_backup_environment:

@@ -139,10 +139,14 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent logs directory
+        - name: create persistent directories
           file:
-            path: /var/log/containers/gnocchi
+            path: "{{ item.path }}"
             state: directory
+            setype: "{{ item.setype }}"
+          with_items:
+            - { 'path': /var/log/containers/gnocchi, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/gnocchi, 'setype': svirt_sandbox_file_t }
         - name: gnocchi logs readme
           copy:
             dest: /var/log/gnocchi/readme.txt
@@ -165,10 +169,6 @@ outputs:
             - name: Set fact gnocchi_statsd_enabled
               set_fact:
                 gnocchi_statsd_enabled: "{{ gnocchi_statsd_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-gnocchi-statsd is running"
-              command: systemctl is-active --quiet openstack-gnocchi-statsd
-              when: gnocchi_statsd_enabled|bool
-              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable openstack-gnocchi-statsd service

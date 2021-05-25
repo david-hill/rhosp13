@@ -123,11 +123,16 @@ parameters:
     description: >
         Cron to move deleted instances to another table - Week Day
     default: '*'
+  NovaCronDBArchivedMaxDelay:
+    type: string
+    description: >
+        Cron to move deleted instances to another table - Max Delay
+    default: '3600'
   NovaCronArchiveDeleteRowsMaxRows:
     type: string
     description: >
         Cron to move deleted instances to another table - Max Rows
-    default: '100'
+    default: '1000'
   NovaCronArchiveDeleteRowsUser:
     type: string
     description: >
@@ -142,12 +147,85 @@ parameters:
     type: boolean
     description: >
         Cron to move deleted instances to another table - Until complete
+    default: true
+  NovaCronArchiveDeleteRowsPurge:
+    type: boolean
+    description: >
+        Purge shadow tables immediately after scheduled archiving
+    default: false
+  NovaCronPurgeShadowTablesMinute:
+    type: string
+    description: >
+        Cron to purge shadow tables - Minute
+    default: '0'
+  NovaCronPurgeShadowTablesHour:
+    type: string
+    description: >
+        Cron to purge shadow tables - Hour
+    default: '5'
+  NovaCronPurgeShadowTablesMonthday:
+    type: string
+    description: >
+        Cron to purge shadow tables - Month Day
+    default: '*'
+  NovaCronPurgeShadowTablesMonth:
+    type: string
+    description: >
+        Cron to purge shadow tables - Month
+    default: '*'
+  NovaCronPurgeShadowTablesWeekday:
+    type: string
+    description: >
+        Cron to purge shadow tables - Week Day
+    default: '*'
+  NovaCronPurgeShadowTablesUser:
+    type: string
+    description: >
+        Cron to purge shadow tables - User
+    default: 'nova'
+  NovaCronPurgeShadowTablesDestination:
+    type: string
+    description: >
+        Cron to purge shadow tables - Log destination
+    default: '/var/log/nova/nova-rowspurge.log'
+  NovaCronPurgeShadowTablesAge:
+    type: number
+    description: >
+        Cron to purge shadow tables - Age
+        This will define the retention policy when
+        purging the shadow tables in days.
+        0 means, purge data older than today in
+        shadow tables.
+    default: 14
+  NovaCronPurgeShadowTablesVerbose:
+    type: boolean
+    description: >
+        Cron to purge shadow tables - Verbose
+    default: false
+  NovaCronPurgeShadowTablesAllCells:
+    type: boolean
+    description: >
+        Cron to purge shadow tables - All cells
     default: false
   NovaPlacementAPIInterface:
     type: string
     description: >
         Endpoint interface to be used for the placement API.
     default: 'internal'
+  NovaCronArchiveDeleteAllCells:
+    type: boolean
+    description: >
+        Archive deleted instances from all cells
+    default: true
+  NovaCronArchiveDeleteRowsAge:
+    type: number
+    description: >
+        Cron to archive deleted instances - Age
+        This will define the retention policy when
+        archiving the deleted instances entries in days.
+        0 means, purge data older than today in
+        shadow tables.
+    default: 90
 
 conditions:
 
@@ -161,7 +239,12 @@ outputs:
       service_name: nova_base
       config_settings:
         map_merge:
-        - nova::my_ip: {get_param: [ServiceNetMap, NovaApiNetwork]}
+        - nova::my_ip:
+            str_replace:
+              template:
+                "%{hiera('$NETWORK')}"
+              params:
+                $NETWORK: {get_param: [ServiceNetMap, NovaApiNetwork]}
           nova::rabbit_password: {get_param: RabbitPassword}
           nova::rabbit_userid: {get_param: RabbitUserName}
           nova::rabbit_use_ssl: {get_param: RabbitClientUseSSL}
@@ -223,7 +306,7 @@ outputs:
           nova::network::neutron::dhcp_domain: ''
           nova::network::neutron::neutron_password: {get_param: NeutronPassword}
           nova::network::neutron::neutron_url: {get_param: [EndpointMap, NeutronInternal, uri]}
-          nova::network::neutron::neutron_auth_url: {get_param: [EndpointMap, KeystoneV3Admin, uri]}
+          nova::network::neutron::neutron_auth_url: {get_param: [EndpointMap, KeystoneV3Internal, uri]}
           nova::rabbit_heartbeat_timeout_threshold: 60
           nova::cinder_catalog_info: 'volumev3:cinderv3:internalURL'
           nova::host: "%{hiera('fqdn_canonical')}"
@@ -243,10 +326,24 @@ outputs:
           nova::cron::archive_deleted_rows::monthday: {get_param: NovaCronArchiveDeleteRowsMonthday}
           nova::cron::archive_deleted_rows::month: {get_param: NovaCronArchiveDeleteRowsMonth}
           nova::cron::archive_deleted_rows::weekday: {get_param: NovaCronArchiveDeleteRowsWeekday}
+          nova::cron::archive_deleted_rows::maxdelay: {get_param: NovaCronDBArchivedMaxDelay}
           nova::cron::archive_deleted_rows::max_rows: {get_param: NovaCronArchiveDeleteRowsMaxRows}
           nova::cron::archive_deleted_rows::user: {get_param: NovaCronArchiveDeleteRowsUser}
           nova::cron::archive_deleted_rows::destination: {get_param: NovaCronArchiveDeleteRowsDestination}
           nova::cron::archive_deleted_rows::until_complete: {get_param: NovaCronArchiveDeleteRowsUntilComplete}
+          nova::cron::archive_deleted_rows::purge: {get_param: NovaCronArchiveDeleteRowsPurge}
+          nova::cron::archive_deleted_rows::all_cells: {get_param: NovaCronArchiveDeleteAllCells}
+          nova::cron::archive_deleted_rows::age: {get_param: NovaCronArchiveDeleteRowsAge}
+          nova::cron::purge_shadow_tables::minute: {get_param: NovaCronPurgeShadowTablesMinute}
+          nova::cron::purge_shadow_tables::hour: {get_param: NovaCronPurgeShadowTablesHour}
+          nova::cron::purge_shadow_tables::monthday: {get_param: NovaCronPurgeShadowTablesMonthday}
+          nova::cron::purge_shadow_tables::month: {get_param: NovaCronPurgeShadowTablesMonth}
+          nova::cron::purge_shadow_tables::weekday: {get_param: NovaCronPurgeShadowTablesWeekday}
+          nova::cron::purge_shadow_tables::user: {get_param: NovaCronPurgeShadowTablesUser}
+          nova::cron::purge_shadow_tables::destination: {get_param: NovaCronPurgeShadowTablesDestination}
+          nova::cron::purge_shadow_tables::age: {get_param: NovaCronPurgeShadowTablesAge}
+          nova::cron::purge_shadow_tables::verbose: {get_param: NovaCronPurgeShadowTablesVerbose}
+          nova::cron::purge_shadow_tables::all_cells: {get_param: NovaCronPurgeShadowTablesAllCells}
         -
           if:
           - compute_upgrade_level_empty

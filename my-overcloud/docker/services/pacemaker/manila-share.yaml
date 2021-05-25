@@ -10,6 +10,14 @@ parameters:
   DockerManilaConfigImage:
     description: image
     type: string
+  ClusterCommonTag:
+    default: false
+    description: When set to false, a pacemaker service is configured
+                 to use a floating tag for its container image name,
+                 e.g. 'REGISTRY/NAMESPACE/IMAGENAME:pcmklatest'. When
+                 set to true, the service uses a floating prefix as
+                 well, e.g. 'cluster-common-tag/IMAGENAME:pcmklatest'.
+    type: boolean
   EndpointMap:
     default: {}
     description: Mapping of service endpoint -> protocol. Typically set
@@ -40,11 +48,6 @@ parameters:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
-  PcmkConfigRestartTimeout:
-    default: 600
-    description: Time in seconds to wait for a pcmk resource to restart when
-                 a config change is detected and the resource is being restarted
-    type: number
   DeployIdentifier:
     default: ''
     type: string
@@ -54,6 +57,7 @@ parameters:
 
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
+  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
 
 resources:
 
@@ -85,12 +89,15 @@ outputs:
         map_merge:
           - get_attr: [ManilaBase, role_data, config_settings]
           - tripleo::profile::pacemaker::manila::share_bundle::manila_share_docker_image: &manila_share_image_pcmklatest
-              list_join:
-                - ':'
-                - - yaql:
-                      data: {get_param: DockerManilaShareImage}
-                      expression: $.data.rightSplit(separator => ":", maxSplits => 1)[0]
-                  - 'pcmklatest'
+              yaql:
+                data:
+                  if:
+                    - common_tag_enabled
+                    - yaql:
+                        data: {get_param: DockerManilaShareImage}
+                        expression: concat("cluster-common-tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                    - {get_param: DockerManilaShareImage}
+                expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
             tripleo::profile::pacemaker::manila::share_bundle::docker_volumes: {get_attr: [ManilaCommon, manila_share_volumes]}
             tripleo::profile::pacemaker::manila::share_bundle::docker_environment: {get_attr: [ManilaCommon, manila_share_environment]}
             manila::share::manage_service: false
@@ -148,7 +155,8 @@ outputs:
               - /etc/localtime:/etc/localtime:ro
               - /dev/shm:/dev/shm:rw
               - /etc/sysconfig/docker:/etc/sysconfig/docker:ro
-              - /usr/bin:/usr/bin:ro
+              - /usr/bin/docker:/usr/bin/docker:ro
+              - /usr/bin/docker-current:/usr/bin/docker-current:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
         step_3:
           manila_share_init_logs:
@@ -166,22 +174,14 @@ outputs:
             detach: false
             net: host
             user: root
-            command:
-              - '/usr/bin/bootstrap_host_exec'
-              - 'manila_share'
-              - str_replace:
-                  template:
-                    'if /usr/sbin/pcs resource show openstack-manila-share; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT openstack-manila-share; echo "openstack-manila-share restart invoked"; fi'
-                  params:
-                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
+            environment:
+              - TRIPLEO_MINOR_UPDATE
+            command: /pacemaker_restart_bundle.sh openstack-manila-share manila_share
             image: {get_param: DockerManilaShareImage}
             volumes:
               list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - /dev/shm:/dev/shm:rw
-                  - /var/lib/config-data/puppet-generated/manila/:/var/lib/kolla/config_files/src:ro
+                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
+                - - /var/lib/config-data/puppet-generated/manila/:/var/lib/kolla/config_files/src:ro
           manila_share_init_bundle:
             start_order: 1
             detach: false
@@ -213,11 +213,13 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item }}"
+            path: "{{ item.path }}"
+            setype: "{{ item.setype }}"
             state: directory
           with_items:
-            - /var/log/containers/manila
-            - /var/lib/manila
+            - { 'path': /var/log/containers/manila, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/lib/manila, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/manila, 'setype': svirt_sandbox_file_t }
         - name: manila logs readme
           copy:
             dest: /var/log/manila/readme.txt
@@ -242,14 +244,16 @@ outputs:
               register: manila_share_image_id
             - block:
                 - name: Get a list of container using Manila-Share image
-                  shell: "docker ps -a -q -f 'ancestor={{manila_share_image_id.stdout}}'"
+                  shell: "docker ps -a -q -f 'ancestor={{ item }}'"
+                  with_items: "{{ manila_share_image_id.stdout_lines }}"
                   register: manila_share_containers_to_destroy
-                # It will be recreated with the delpoy step.
+                # It will be recreated with the deploy step.
                 - name: Remove any container using the same Manila-Share image
-                  shell: "docker rm -fv {{item}}"
-                  with_items: "{{ manila_share_containers_to_destroy.stdout_lines }}"
+                  shell: "docker rm -fv {{ item }}"
+                  with_items: "{{ manila_share_containers_to_destroy.results | map(attribute='stdout_lines') | list | flatten }}"
                 - name: Remove previous Manila-Share images
-                  shell: "docker rmi -f {{manila_share_image_id.stdout}}"
+                  shell: "docker rmi -f {{ item }}"
+                  with_items: "{{ manila_share_image_id.stdout_lines }}"
               when:
                 - manila_share_image_id.stdout != ''
             - name: Pull latest Manila-Share images
@@ -289,12 +293,8 @@ outputs:
               ignore_errors: true
               register: manila_share_pcs_res_result
             - name: Set fact manila_share_pcs_res
-              set_fact: "{{manila_share_pcs_res_result|succeeded}}"
-        - name: Manila-Share baremetal to container upgrade tasks
-          when:
-            - step|int == 1
-            - not manila_share_containerized|bool
-          block:
+              set_fact:
+                manila_share_pcs_res: "{{manila_share_pcs_res_result|succeeded}}"
             - name: get bootstrap nodeid
               tags: common
               command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
@@ -302,6 +302,11 @@ outputs:
             - name: set is_bootstrap_node fact
               tags: common
               set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
+        - name: Manila-Share baremetal to container upgrade tasks
+          when:
+            - step|int == 1
+            - not manila_share_containerized|bool
+          block:
             - name: Check cluster resource status
               pacemaker_resource:
                 resource: openstack-manila-share
@@ -334,7 +339,7 @@ outputs:
             - step|int == 1
             - manila_share_containerized|bool
             - is_bootstrap_node
-            - manila_share_pcs_res|succeeded
+            - manila_share_pcs_res|bool
           block:
             - name: Disable the Manila-Share cluster resource before container upgrade
               pacemaker_resource:

@@ -10,6 +10,14 @@ parameters:
   DockerCinderConfigImage:
     description: The container image to use for the cinder config_volume
     type: string
+  ClusterCommonTag:
+    default: false
+    description: When set to false, a pacemaker service is configured
+                 to use a floating tag for its container image name,
+                 e.g. 'REGISTRY/NAMESPACE/IMAGENAME:pcmklatest'. When
+                 set to true, the service uses a floating prefix as
+                 well, e.g. 'cluster-common-tag/IMAGENAME:pcmklatest'.
+    type: boolean
   CinderBackupBackend:
     default: swift
     description: The short name of the Cinder Backup backend to use.
@@ -52,11 +60,6 @@ parameters:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
-  PcmkConfigRestartTimeout:
-    default: 600
-    description: Time in seconds to wait for a pcmk resource to restart when
-                 a config change is detected and the resource is being restarted
-    type: number
   DeployIdentifier:
     default: ''
     type: string
@@ -66,6 +69,7 @@ parameters:
 
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
+  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
 
 resources:
 
@@ -100,12 +104,15 @@ outputs:
         map_merge:
           - get_attr: [CinderBackupBase, role_data, config_settings]
           - tripleo::profile::pacemaker::cinder::backup_bundle::cinder_backup_docker_image: &cinder_backup_image_pcmklatest
-              list_join:
-                - ':'
-                - - yaql:
-                      data: {get_param: DockerCinderBackupImage}
-                      expression: $.data.rightSplit(separator => ":", maxSplits => 1)[0]
-                  - 'pcmklatest'
+              yaql:
+                data:
+                  if:
+                    - common_tag_enabled
+                    - yaql:
+                        data: {get_param: DockerCinderBackupImage}
+                        expression: concat("cluster-common-tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                    - {get_param: DockerCinderBackupImage}
+                expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
             tripleo::profile::pacemaker::cinder::backup_bundle::docker_volumes: {get_attr: [CinderCommon, cinder_backup_volumes]}
             tripleo::profile::pacemaker::cinder::backup_bundle::docker_environment: {get_attr: [CinderCommon, cinder_backup_environment]}
             cinder::backup::manage_service: false
@@ -169,7 +176,8 @@ outputs:
               - /etc/localtime:/etc/localtime:ro
               - /dev/shm:/dev/shm:rw
               - /etc/sysconfig/docker:/etc/sysconfig/docker:ro
-              - /usr/bin:/usr/bin:ro
+              - /usr/bin/docker:/usr/bin/docker:ro
+              - /usr/bin/docker-current:/usr/bin/docker-current:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
         step_3:
           cinder_backup_init_logs:
@@ -187,22 +195,14 @@ outputs:
             detach: false
             net: host
             user: root
-            command:
-              - '/usr/bin/bootstrap_host_exec'
-              - 'cinder_backup'
-              - str_replace:
-                  template:
-                    'if /usr/sbin/pcs resource show openstack-cinder-backup; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT openstack-cinder-backup; echo "openstack-cinder-backup restart invoked"; fi'
-                  params:
-                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
+            environment:
+              - TRIPLEO_MINOR_UPDATE
+            command: /pacemaker_restart_bundle.sh openstack-cinder-backup cinder_backup
             image: {get_param: DockerCinderBackupImage}
             volumes:
               list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - /dev/shm:/dev/shm:rw
-                  - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
+                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
+                - - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
           cinder_backup_init_bundle:
             start_order: 1
             detach: false
@@ -234,11 +234,13 @@ outputs:
       host_prep_tasks:
         - name: create persistent directories
           file:
-            path: "{{ item }}"
+            path: "{{ item.path }}"
             state: directory
+            setype: "{{ item.setype }}"
           with_items:
-            - /var/lib/cinder
-            - /var/log/containers/cinder
+            - { 'path': /var/log/containers/cinder, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/lib/cinder, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/cinder, 'setype': svirt_sandbox_file_t }
         - name: cinder logs readme
           copy:
             dest: /var/log/cinder/readme.txt
@@ -263,14 +265,16 @@ outputs:
               register: cinder_backup_image_id
             - block:
                 - name: Get a list of container using Cinder-Backup image
-                  shell: "docker ps -a -q -f 'ancestor={{cinder_backup_image_id.stdout}}'"
+                  shell: "docker ps -a -q -f 'ancestor={{ item }}'"
+                  with_items: "{{ cinder_backup_image_id.stdout_lines }}"
                   register: cinder_backup_containers_to_destroy
                 # It will be recreated with the deploy step.
                 - name: Remove any container using the same Cinder-Backup image
-                  shell: "docker rm -fv {{item}}"
-                  with_items: "{{ cinder_backup_containers_to_destroy.stdout_lines }}"
+                  shell: "docker rm -fv {{ item }}"
+                  with_items: "{{ cinder_backup_containers_to_destroy.results | map(attribute='stdout_lines') | list | flatten }}"
                 - name: Remove previous Cinder-Backup images
-                  shell: "docker rmi -f {{cinder_backup_image_id.stdout}}"
+                  shell: "docker rmi -f {{ item }}"
+                  with_items: "{{ cinder_backup_image_id.stdout_lines }}"
               when:
                 - cinder_backup_image_id.stdout != ''
             - name: Pull latest Cinder-Backup images
@@ -313,11 +317,6 @@ outputs:
             - name: Set fact cinder_backup_pcs_res
               set_fact:
                 cinder_backup_pcs_res: "{{cinder_backup_pcs_res_result|succeeded}}"
-        - name: Cinder-Backup baremetal to container upgrade tasks
-          when:
-            - step|int == 1
-            - not cinder_backup_containerized|bool
-          block:
             - name: get bootstrap nodeid
               tags: common
               command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
@@ -325,6 +324,11 @@ outputs:
             - name: set is_bootstrap_node fact
               tags: common
               set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
+        - name: Cinder-Backup baremetal to container upgrade tasks
+          when:
+            - step|int == 1
+            - not cinder_backup_containerized|bool
+          block:
             - name: Check cluster resource status
               pacemaker_resource:
                 resource: openstack-cinder-backup

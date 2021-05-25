@@ -46,6 +46,8 @@ parameters:
     description: The Ceph client key. Can be created with ceph-authtool --gen-print-key.
     type: string
     hidden: true
+    constraints:
+    - allowed_pattern: "^[a-zA-Z0-9+/]{38}==$"
   CephClusterFSID:
     type: string
     description: The Ceph cluster FSID. Must be a UUID.
@@ -82,6 +84,12 @@ parameters:
     description: If set to true and if EnableInternalTLS is enabled, it will
                  enable TLS transaport for libvirt VNC and configure the
                  relevant keys for libvirt.
+  UseTLSTransportForNbd:
+    type: boolean
+    default: false
+    description: If set to true and if EnableInternalTLS is enabled, it will
+                 enable TLS transaport for libvirt NBD and configure the
+                 relevant keys for libvirt.
   InternalTLSCAFile:
     default: '/etc/ipa/ca.crt'
     type: string
@@ -91,6 +99,14 @@ parameters:
     default: '/etc/pki/CA/certs/vnc.crt'
     type: string
     description: Specifies the CA cert to use for VNC TLS.
+  InternalTLSNbdCAFile:
+    default: '/etc/pki/qemu/ca-cert.pem'
+    type: string
+    description: Specifies the CA cert to use for NBD TLS.
+  InternalTLSQemuCAFile:
+    default: '/etc/pki/CA/certs/qemu.pem'
+    type: string
+    description: Specifies the CA cert to use for qemu.
   LibvirtCACert:
     type: string
     default: ''
@@ -113,6 +129,26 @@ parameters:
                  the InternalTLSVncCAFile parameter) is not desired. The current
                  default reflects TripleO's default CA, which is FreeIPA.
                  It will only be used if internal TLS is enabled.
+  LibvirtNbdCACert:
+    type: string
+    default: ''
+    description: This specifies the CA certificate to use for NBD TLS.
+                 This file will be symlinked to the default CA path,
+                 which is /etc/pki/libvirt-nbd/ca-cert.pem.
+                 This parameter should be used if the default (which comes from
+                 the InternalTLSNbdCAFile parameter) is not desired. The current
+                 default reflects TripleO's default CA, which is FreeIPA.
+                 It will only be used if internal TLS is enabled.
+  QemuCACert:
+    type: string
+    default: ''
+    description: This specifies the CA certificate to use for qemu.
+                 This file will be symlinked to the default CA path,
+                 which is /etc/pki/qemu/ca-cert.pem.
+                 This parameter should be used if the default (which comes from
+                 the InternalTLSQemuCAFile parameter) is not desired. The current
+                 default reflects TripleO's default CA, which is FreeIPA.
+                 It will only be used if internal TLS is enabled.
   MigrationSshKey:
     type: json
     description: >
@@ -130,6 +166,17 @@ parameters:
     description: The password for the libvirt service when TLS is enabled
     type: string
     hidden: true
+  LibvirtLogFilters:
+    description: Defines a filter to select a different logging level
+                 for a given category log outputs, as specified in
+                 https://libvirt.org/logging.html .
+    type: string
+    default: '1:libvirt 1:qemu 1:conf 1:security 3:event 3:json 3:file 3:object 1:util'
+  LibvirtTLSPriority:
+    description: >
+      Override the compile time default TLS priority string.
+    type: string
+    default: 'NORMAL:-VERS-SSL3.0:-VERS-TLS-ALL:+VERS-TLS1.2'
 
 conditions:
 
@@ -161,6 +208,24 @@ conditions:
       - {get_param: LibvirtVncCACert}
       - ''
 
+  use_tls_for_nbd:
+    and:
+    - equals:
+      - {get_param: EnableInternalTLS}
+      - true
+    - equals:
+      - {get_param: UseTLSTransportForNbd}
+      - true
+
+  libvirt_nbd_specific_ca_unset:
+    equals:
+      - {get_param: LibvirtNbdCACert}
+      - ''
+
+  qemu_specific_ca_unset:
+    equals:
+      - {get_param: QemuCACert}
+      - ''
 
 resources:
   NovaBase:
@@ -209,7 +274,13 @@ outputs:
             nova::compute::libvirt::qemu::configure_qemu: true
             nova::compute::libvirt::qemu::max_files: 32768
             nova::compute::libvirt::qemu::max_processes: 131072
-            nova::compute::libvirt::vncserver_listen: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
+            nova::compute::libvirt::vncserver_listen:
+              str_replace:
+                 template:
+                   "%{hiera('$NETWORK')}"
+                 params:
+                   $NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
+            nova::compute::libvirt::log_filters: {get_param: LibvirtLogFilters}
             nova::migration::qemu::configure_qemu: true
             nova::migration::qemu::migration_port_min: 61152
             nova::migration::qemu::migration_port_max: 61215
@@ -228,8 +299,13 @@ outputs:
                 generate_service_certificates: true
                 tripleo::profile::base::nova::migration::client::libvirt_tls: true
                 tripleo::profile::base::nova::libvirt::tls_password: {get_param: [LibvirtTLSPassword]}
+                nova::compute::libvirt::tls_priority: {get_param: LibvirtTLSPriority}
                 nova::migration::libvirt::listen_address:
-                  get_param: [ServiceNetMap, NovaLibvirtNetwork]
+                  str_replace:
+                     template:
+                       "%{hiera('$NETWORK')}"
+                     params:
+                       $NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
                 nova::migration::libvirt::live_migration_inbound_addr:
                   str_replace:
                     template:
@@ -268,6 +344,47 @@ outputs:
                     principal:
                       str_replace:
                         template: "libvirt/%{hiera('fqdn_NETWORK')}"
+                        params:
+                          NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
+                # create the qemu and qemu_ndb dirs also when when tls for nbd is not enabled
+                # this allows us to enable it even at a later time without restart of instances
+                tripleo::certmonger::qemu_dirs::certificate_dir: '/etc/pki/qemu'
+                tripleo::certmonger::qemu_nbd_dirs::certificate_dir: '/etc/pki/libvirt-nbd'
+                tripleo::certmonger::ca::qemu::origin_ca_pem:
+                  if:
+                    - qemu_specific_ca_unset
+                    - get_param: InternalTLSQemuCAFile
+                    - get_param: QemuCACert
+                qemu_certificates_specs:
+                  qemu-server-cert:
+                    cacertfile:
+                      if:
+                        - qemu_specific_ca_unset
+                        - get_param: InternalTLSQemuCAFile
+                        - null
+                    service_certificate: '/etc/pki/qemu/server-cert.pem'
+                    service_key: '/etc/pki/qemu/server-key.pem'
+                    hostname:
+                      str_replace:
+                        template: "%{hiera('fqdn_NETWORK')}"
+                        params:
+                          NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
+                    principal:
+                      str_replace:
+                        template: "qemu/%{hiera('fqdn_NETWORK')}"
+                        params:
+                          NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
+                  qemu-nbd-client-cert:
+                    service_certificate: '/etc/pki/libvirt-nbd/client-cert.pem'
+                    service_key: '/etc/pki/libvirt-nbd/client-key.pem'
+                    hostname:
+                      str_replace:
+                        template: "%{hiera('fqdn_NETWORK')}"
+                        params:
+                          NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
+                    principal:
+                      str_replace:
+                        template: "qemu/%{hiera('fqdn_NETWORK')}"
                         params:
                           NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
               -
@@ -310,6 +427,13 @@ outputs:
                         params:
                           NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
               - {}
+          -
+            if:
+              - use_tls_for_nbd
+              -
+                nova::compute::libvirt::qemu::nbd_tls: true
+                nova::migration::libvirt::live_migration_with_native_tls: true
+              - {}
       step_config: |
         include tripleo::profile::base::nova::libvirt
       metadata_settings:
@@ -318,6 +442,9 @@ outputs:
             - use_tls_for_live_migration
             -
               - service: libvirt
+                network: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
+                type: node
+              - service: qemu
                 network: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
                 type: node
             - null

@@ -203,7 +203,14 @@ outputs:
             restart: always
             user: barbican
             healthcheck:
-              test: /openstack/healthcheck
+              test:
+                list_join:
+                  - ' '
+                  - - '/openstack/healthcheck'
+                    - yaql:
+                        expression: str($.data.port)
+                        data:
+                          port: {get_attr: [BarbicanApiBase, role_data, config_settings, 'barbican::api::rabbit_port']}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -220,7 +227,14 @@ outputs:
             restart: always
             user: barbican
             healthcheck:
-              test: /openstack/healthcheck
+              test:
+                list_join:
+                  - ' '
+                  - - '/openstack/healthcheck'
+                    - yaql:
+                        expression: str($.data.port)
+                        data:
+                          port: {get_attr: [BarbicanApiBase, role_data, config_settings, 'barbican::api::rabbit_port']}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -241,9 +255,6 @@ outputs:
             - name: Set fact barbican_enabled
               set_fact:
                 barbican_enabled: "{{ barbican_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service barbican-api is running"
-              command: systemctl is-active --quiet openstack-barbican-api
-              when: barbican_enabled|bool
         - when: step|int == 2
           block:
             - name: Stop and disable barbican_api service

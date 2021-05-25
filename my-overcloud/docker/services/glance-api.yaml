@@ -87,6 +87,10 @@ parameters:
       description: >
         The Ceph cluster name must be at least 1 character and contain only
         letters and numbers.
+  GlanceApiOptVolumes:
+    default: []
+    description: list of optional volumes to be mounted
+    type: comma_delimited_list
 
 conditions:
 
@@ -134,7 +138,7 @@ outputs:
       # BEGIN DOCKER SETTINGS #
       puppet_config:
         config_volume: glance_api
-        puppet_tags: glance_api_config,glance_api_paste_ini,glance_swift_config,glance_cache_config
+        puppet_tags: glance_api_config,glance_api_paste_ini,glance_swift_config,glance_cache_config,glance_image_import_config
         step_config:
           list_join:
             - "\n"
@@ -143,7 +147,7 @@ outputs:
         config_image: {get_param: DockerGlanceApiConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/glance_api.json:
-          command: /usr/bin/glance-api --config-file /usr/share/glance/glance-api-dist.conf --config-file /etc/glance/glance-api.conf
+          command: /usr/bin/glance-api --config-file /usr/share/glance/glance-api-dist.conf --config-file /etc/glance/glance-api.conf --config-file /etc/glance/glance-image-import.conf
           config_files:
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
@@ -186,6 +190,7 @@ outputs:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 - {get_attr: [GlanceLogging, volumes]}
+                - {get_param: GlanceApiOptVolumes}
                 -
                   - /var/lib/kolla/config_files/glance_api.json:/var/lib/kolla/config_files/config.json
                   - /var/lib/config-data/puppet-generated/glance_api/:/var/lib/kolla/config_files/src:ro
@@ -196,6 +201,7 @@ outputs:
                     - cinder_backend_enabled
                     - - /dev:/dev
                       - /etc/iscsi:/etc/iscsi
+                      - /var/lib/iscsi:/var/lib/iscsi
                     - []
             environment:
               - KOLLA_BOOTSTRAP=True
@@ -225,6 +231,7 @@ outputs:
                     volumes:
                       list_concat:
                         - {get_attr: [ContainersCommon, volumes]}
+                        - {get_attr: [GlanceLogging, volumes]}
                         -
                           - /var/lib/kolla/config_files/glance_api_tls_proxy.json:/var/lib/kolla/config_files/config.json:ro
                           - /var/lib/config-data/puppet-generated/glance_api/:/var/lib/kolla/config_files/src:ro
@@ -240,7 +247,7 @@ outputs:
         - - name: Mount NFS on host
             vars:
               nfs_backend_enable: {get_param: GlanceNfsEnabled}
-            mount: name=/var/lib/glance/images src="{{item.NFS_SHARE}}" fstype=nfs4 opts="{{item.NFS_OPTIONS}}" state=mounted
+            mount: name=/var/lib/glance/images src="{{item.NFS_SHARE}}" fstype=nfs opts="{{item.NFS_OPTIONS}}" state=mounted
             with_items:
               - NFS_SHARE: {get_param: GlanceNfsShare}
                 NFS_OPTIONS: {get_param: GlanceNfsOptions}
@@ -249,6 +256,10 @@ outputs:
           - name: ensure ceph configurations exist
             file:
               path: /etc/ceph
+              state: directory
+          - name: ensure /var/lib/glance exists
+            file:
+              path: /var/lib/glance
               state: directory
       upgrade_tasks:
         - when: step|int == 0
@@ -261,10 +272,6 @@ outputs:
             - name: Set fact glance_api_enabled
               set_fact:
                 glance_api_enabled: "{{ glance_api_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-glance-api is running"
-              command: systemctl is-active --quiet openstack-glance-api
-              tags: validation
-              when: glance_api_enabled|bool
         - when: step|int == 2
           block:
             - name: Stop and disable glance_api service

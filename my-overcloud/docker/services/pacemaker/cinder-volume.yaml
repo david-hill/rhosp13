@@ -10,6 +10,14 @@ parameters:
   DockerCinderConfigImage:
     description: The container image to use for the cinder config_volume
     type: string
+  ClusterCommonTag:
+    default: false
+    description: When set to false, a pacemaker service is configured
+                 to use a floating tag for its container image name,
+                 e.g. 'REGISTRY/NAMESPACE/IMAGENAME:pcmklatest'. When
+                 set to true, the service uses a floating prefix as
+                 well, e.g. 'cluster-common-tag/IMAGENAME:pcmklatest'.
+    type: boolean
   EndpointMap:
     default: {}
     description: Mapping of service endpoint -> protocol. Typically set
@@ -40,11 +48,6 @@ parameters:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
     type: boolean
-  PcmkConfigRestartTimeout:
-    default: 600
-    description: Time in seconds to wait for a pcmk resource to restart when
-                 a config change is detected and the resource is being restarted
-    type: number
   DeployIdentifier:
     default: ''
     type: string
@@ -54,6 +57,7 @@ parameters:
 
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
+  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
 
 resources:
 
@@ -86,12 +90,15 @@ outputs:
           - get_attr: [CinderBase, role_data, config_settings]
           - tripleo::profile::base::lvm::enable_udev: false
             tripleo::profile::pacemaker::cinder::volume_bundle::cinder_volume_docker_image: &cinder_volume_image_pcmklatest
-              list_join:
-                - ':'
-                - - yaql:
-                      data: {get_param: DockerCinderVolumeImage}
-                      expression: $.data.rightSplit(separator => ":", maxSplits => 1)[0]
-                  - 'pcmklatest'
+              yaql:
+                data:
+                  if:
+                    - common_tag_enabled
+                    - yaql:
+                        data: {get_param: DockerCinderVolumeImage}
+                        expression: concat("cluster-common-tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                    - {get_param: DockerCinderVolumeImage}
+                expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
             tripleo::profile::pacemaker::cinder::volume_bundle::docker_volumes: {get_attr: [CinderCommon, cinder_volume_volumes]}
             tripleo::profile::pacemaker::cinder::volume_bundle::docker_environment: {get_attr: [CinderCommon, cinder_volume_environment]}
             cinder::volume::manage_service: false
@@ -154,7 +161,8 @@ outputs:
               - /etc/localtime:/etc/localtime:ro
               - /dev/shm:/dev/shm:rw
               - /etc/sysconfig/docker:/etc/sysconfig/docker:ro
-              - /usr/bin:/usr/bin:ro
+              - /usr/bin/docker:/usr/bin/docker:ro
+              - /usr/bin/docker-current:/usr/bin/docker-current:ro
               - /var/run/docker.sock:/var/run/docker.sock:rw
         step_3:
           cinder_volume_init_logs:
@@ -172,22 +180,14 @@ outputs:
             detach: false
             net: host
             user: root
-            command:
-              - '/usr/bin/bootstrap_host_exec'
-              - 'cinder_volume'
-              - str_replace:
-                  template:
-                    'if /usr/sbin/pcs resource show openstack-cinder-volume; then /usr/sbin/pcs resource restart --wait=PCMKTIMEOUT openstack-cinder-volume; echo "openstack-cinder-volume restart invoked"; fi'
-                  params:
-                    PCMKTIMEOUT: {get_param: PcmkConfigRestartTimeout}
+            environment:
+              - TRIPLEO_MINOR_UPDATE
+            command: /pacemaker_restart_bundle.sh openstack-cinder-volume cinder_volume
             image: {get_param: DockerCinderVolumeImage}
             volumes:
               list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - /dev/shm:/dev/shm:rw
-                  - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
+                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
+                - - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
           cinder_volume_init_bundle:
             start_order: 1
             detach: false
@@ -230,14 +230,16 @@ outputs:
               register: cinder_volume_image_id
             - block:
                 - name: Get a list of container using Cinder-Volume image
-                  shell: "docker ps -a -q -f 'ancestor={{cinder_volume_image_id.stdout}}'"
+                  shell: "docker ps -a -q -f 'ancestor={{ item }}'"
+                  with_items: "{{ cinder_volume_image_id.stdout_lines }}"
                   register: cinder_volume_containers_to_destroy
-                # It will be recreated with the delpoy step.
+                # It will be recreated with the deploy step.
                 - name: Remove any container using the same Cinder-Volume image
-                  shell: "docker rm -fv {{item}}"
-                  with_items: "{{ cinder_volume_containers_to_destroy.stdout_lines }}"
+                  shell: "docker rm -fv {{ item }}"
+                  with_items: "{{ cinder_volume_containers_to_destroy.results | map(attribute='stdout_lines') | list | flatten }}"
                 - name: Remove previous Cinder-Volume images
-                  shell: "docker rmi -f {{cinder_volume_image_id.stdout}}"
+                  shell: "docker rmi -f {{ item }}"
+                  with_items: "{{ cinder_volume_image_id.stdout_lines }}"
               when:
                 - cinder_volume_image_id.stdout != ''
             - name: Pull latest Cinder-Volume images
@@ -280,11 +282,6 @@ outputs:
             - name: Set fact cinder_volume_pcs_res
               set_fact:
                 cinder_volume_pcs_res: "{{cinder_volume_pcs_res_result|succeeded}}"
-        - name: Cinder-Volume baremetal to container upgrade tasks
-          when:
-            - step|int == 1
-            - not cinder_volume_containerized|bool
-          block:
             - name: get bootstrap nodeid
               tags: common
               command: hiera -c /etc/puppet/hiera.yaml bootstrap_nodeid
@@ -292,6 +289,11 @@ outputs:
             - name: set is_bootstrap_node fact
               tags: common
               set_fact: is_bootstrap_node={{bootstrap_node.stdout|lower == ansible_hostname|lower}}
+        - name: Cinder-Volume baremetal to container upgrade tasks
+          when:
+            - step|int == 1
+            - not cinder_volume_containerized|bool
+          block:
             - name: Check cluster resource status
               pacemaker_resource:
                 resource: openstack-cinder-volume
@@ -319,6 +321,17 @@ outputs:
                   until: output.rc == 0
             - name: Disable cinder_volume service from boot
               service: name=openstack-cinder-volume enabled=no
+            - name: Unmount cinder NFS shares mounted on the host
+              mount:
+                path: "{{ item.mount }}"
+                state: unmounted
+              loop: "{{ ansible_mounts }}"
+              loop_control:
+                label: "{{ item.mount }}"
+                index_var: cinder_mount_index
+              when:
+                - "'/var/lib/cinder/' in item.mount"
+                - "'nfs' in item.fstype"
         - name: Update cinder_volume pcs resource bundle for new container image
           when:
             - step|int == 1
@@ -382,3 +395,16 @@ outputs:
             - release == 'ocata'
             - is_bootstrap_node|bool
             - cinder_volume_res|bool
+        - name: Unmount cinder NFS shares mounted on the host
+          mount:
+            path: "{{ item.mount }}"
+            state: unmounted
+          loop: "{{ ansible_mounts }}"
+          loop_control:
+            label: "{{ item.mount }}"
+            index_var: cinder_mount_index
+          when:
+            - step|int == 2
+            - release == 'ocata'
+            - "'/var/lib/cinder/' in item.mount"
+            - "'nfs' in item.fstype"

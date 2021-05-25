@@ -28,13 +28,20 @@ class PathManager(object):
     """Helper class to manipulate ownership of a given path"""
     def __init__(self, path):
         self.path = path
+        self.uid = None
+        self.gid = None
+        self.is_dir = None
         self._update()
 
     def _update(self):
-        statinfo = os.stat(self.path)
-        self.is_dir = stat.S_ISDIR(statinfo.st_mode)
-        self.uid = statinfo.st_uid
-        self.gid = statinfo.st_gid
+        try:
+            statinfo = os.stat(self.path)
+            self.is_dir = stat.S_ISDIR(statinfo.st_mode)
+            self.uid = statinfo.st_uid
+            self.gid = statinfo.st_gid
+        except Exception:
+            LOG.exception('Could not update metadata for %s', self.path)
+            raise
 
     def __str__(self):
         return "uid: {} gid: {} path: {}{}".format(
@@ -64,8 +71,13 @@ class PathManager(object):
                      self.gid,
                      self.uid if target_uid == -1 else target_uid,
                      self.gid if target_gid == -1 else target_gid)
-            os.chown(self.path, target_uid, target_gid)
-            self._update()
+            try:
+                os.chown(self.path, target_uid, target_gid)
+                self._update()
+            except Exception:
+                LOG.exception('Could not change ownership of %s: ',
+                              self.path)
+                raise
         else:
             LOG.info('Ownership of %s already %d:%d',
                      self.path,
@@ -95,12 +107,19 @@ class NovaStatedirOwnershipManager(object):
        docker nova uid/gid is not known in this context).
     """
     def __init__(self, statedir, upgrade_marker='upgrade_marker',
-                 nova_user='nova'):
+                 nova_user='nova', exclude_paths=None):
         self.statedir = statedir
         self.nova_user = nova_user
 
         self.upgrade_marker_path = os.path.join(statedir, upgrade_marker)
         self.upgrade = os.path.exists(self.upgrade_marker_path)
+
+        self.exclude_paths = [self.upgrade_marker_path]
+        if exclude_paths is not None:
+            for p in exclude_paths:
+                if not p.startswith(os.path.sep):
+                    p = os.path.join(self.statedir, p)
+                self.exclude_paths.append(p)
 
         self.target_uid, self.target_gid = self._get_nova_ids()
         self.previous_uid, self.previous_gid = self._get_previous_nova_ids()
@@ -122,24 +141,31 @@ class NovaStatedirOwnershipManager(object):
         for f in os.listdir(top):
             pathname = os.path.join(top, f)
 
-            if pathname == self.upgrade_marker_path:
+            if pathname in self.exclude_paths:
                 continue
 
-            pathinfo = PathManager(pathname)
-            LOG.info("Checking %s", pathinfo)
-            if pathinfo.is_dir:
-                # Always chown the directories
-                pathinfo.chown(self.target_uid, self.target_gid)
-                self._walk(pathname)
-            elif self.id_change:
-                # Only chown files if it's an upgrade and the file is owned by
-                # the host nova uid/gid
-                pathinfo.chown(
-                    self.target_uid if pathinfo.uid == self.previous_uid
-                    else pathinfo.uid,
-                    self.target_gid if pathinfo.gid == self.previous_gid
-                    else pathinfo.gid
-                )
+            try:
+                pathinfo = PathManager(pathname)
+                LOG.info("Checking %s", pathinfo)
+                if pathinfo.is_dir:
+                    # Always chown the directories
+                    pathinfo.chown(self.target_uid, self.target_gid)
+                    self._walk(pathname)
+                elif self.id_change:
+                    # Only chown files if it's an upgrade and the file is owned by
+                    # the host nova uid/gid
+                    pathinfo.chown(
+                        self.target_uid if pathinfo.uid == self.previous_uid
+                        else pathinfo.uid,
+                        self.target_gid if pathinfo.gid == self.previous_gid
+                        else pathinfo.gid
+                    )
+            except Exception:
+                # Likely to have been caused by external systems
+                # interacting with this directory tree,
+                # especially on NFS e.g snapshot dirs.
+                # Just ignore it and continue on to the next entry
+                continue
 
     def run(self):
         LOG.info('Applying nova statedir ownership')
@@ -161,5 +187,13 @@ class NovaStatedirOwnershipManager(object):
 
         LOG.info('Nova statedir ownership complete')
 
+
+def get_exclude_paths():
+    exclude_paths = os.environ.get('NOVA_STATEDIR_OWNERSHIP_SKIP')
+    if exclude_paths is not None:
+        exclude_paths = exclude_paths.split(os.pathsep)
+    return exclude_paths
+
+
 if __name__ == '__main__':
-    NovaStatedirOwnershipManager('/var/lib/nova').run()
+    NovaStatedirOwnershipManager('/var/lib/nova', exclude_paths=get_exclude_paths()).run()

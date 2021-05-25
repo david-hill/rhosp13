@@ -76,7 +76,7 @@ outputs:
         config_image: {get_param: DockerOctaviaConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/octavia_housekeeping.json:
-          command: /usr/bin/octavia-housekeeping --config-file /usr/share/octavia/octavia-dist.conf --config-file /etc/octavia/octavia.conf --log-file /var/log/octavia/housekeeping.log --config-dir /etc/octavia/conf.d/common --config-dir /etc/octavia/conf.d/octavia-housekeeping
+          command: /usr/bin/octavia-housekeeping --config-file /usr/share/octavia/octavia-dist.conf --config-file /etc/octavia/octavia.conf --log-file /var/log/octavia/housekeeping.log --config-file /etc/octavia/post-deploy.conf --config-dir /etc/octavia/conf.d/octavia-housekeeping
           config_files:
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
@@ -119,10 +119,14 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent logs directory
+        - name: create persistent directories
           file:
-            path: /var/log/containers/octavia
+            path: "{{ item.path }}"
             state: directory
+            setype: "{{ item.setype }}"
+          with_items:
+            - { 'path': /var/log/containers/octavia, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/octavia, 'setype': svirt_sandbox_file_t }
         - name: octavia logs readme
           copy:
             dest: /var/log/octavia/readme.txt
@@ -135,16 +139,12 @@ outputs:
           tags: common
           block:
             - name: Check if octavia_housekeeping is deployed
-              common: systemctl is-enabled --quiet openstack-octavia-housekeeping
+              command: systemctl is-enabled --quiet openstack-octavia-housekeeping
               ignore_errors: True
               register: octavia_housekeeping_enabled_result
             - name: Set fact octavia_housekeeping_enabled
               set_fact:
                 octavia_housekeeping_enabled: "{{ octavia_housekeeping_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-octavia-housekeeping is running"
-              command: systemctl is-active --quiet openstack-octavia-housekeeping
-              when: octavia_housekeeping_enabled|bool
-              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable octavia_housekeeping service

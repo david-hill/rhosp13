@@ -119,10 +119,14 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent logs directory
+        - name: create persistent directories
           file:
-            path: /var/log/containers/openvswitch
+            path: "{{ item.path }}"
             state: directory
+            setype: "{{ item.setype }}"
+          with_items:
+            - { 'path': /var/log/containers/openvswitch, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/openvswitch, 'setype': svirt_sandbox_file_t }
         - name: openvswitch logs readme
           copy:
             dest: /var/log/openvswitch/readme.txt
@@ -141,10 +145,6 @@ outputs:
             - name: Set fact ovn_controller_enabled
               set_fact:
                 ovn_controller_enabled: "{{ ovn_controller_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service ovn_controller is running"
-              command: systemctl is-active --quiet ovn-controller
-              when: ovn_controller_enabled|bool
-              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable ovn-controller service

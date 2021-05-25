@@ -5,8 +5,13 @@ resource_registry:
   OS::TripleO::Services::CephMon: ../../docker/services/ceph-ansible/ceph-mon.yaml
   OS::TripleO::Services::CephOSD: ../../docker/services/ceph-ansible/ceph-osd.yaml
   OS::TripleO::Services::CephClient: ../../docker/services/ceph-ansible/ceph-client.yaml
+  OS::TripleO::Services::CeilometerAgentCentral: ../../docker/services/ceilometer-agent-central.yaml
+  OS::TripleO::Services::CeilometerAgentNotification: ../../docker/services/ceilometer-agent-notification.yaml
+  OS::TripleO::Services::CeilometerAgentIpmi: ../../docker/services/ceilometer-agent-ipmi.yaml
+  OS::TripleO::Services::ComputeCeilometerAgent: ../../docker/services/ceilometer-agent-compute.yaml
   OS::TripleO::Services::PankoApi: ../../docker/services/panko-api.yaml
-  OS::TripleO::Services::Collectd: ../../docker/services/collectd.yaml
+  OS::TripleO::Services::Collectd: ../../docker/services/metrics/collectd.yaml
+  OS::TripleO::Services::MetricsQdr: ../../docker/services/metrics/qdr.yaml
   OS::TripleO::Services::RabbitMQ: ../../docker/services/pacemaker/rabbitmq.yaml
   OS::TripleO::Services::HAproxy: ../../docker/services/pacemaker/haproxy.yaml
   OS::TripleO::Services::Pacemaker: ../../puppet/services/pacemaker.yaml
@@ -86,6 +91,7 @@ parameter_defaults:
     - OS::TripleO::Services::CinderScheduler
     - OS::TripleO::Services::CinderVolume
     - OS::TripleO::Services::Collectd
+    - OS::TripleO::Services::MetricsQdr
     - OS::TripleO::Services::TripleoPackages
     - OS::TripleO::Services::TripleoFirewall
     - OS::TripleO::Services::Fluentd
@@ -108,14 +114,21 @@ parameter_defaults:
   EventPipelinePublishers:
     - gnocchi://?archive_policy=high
     - panko://
+  CeilometerQdrPublishEvents: true
+  ManageEventPipeline: true
 
   Debug: true
   DockerPuppetDebug: True
   CephAnsibleDisksConfig:
-    devices:
-      - /dev/loop3
-    journal_size: 512
-    osd_scenario: collocated
+    osd_objectstore: bluestore
+    osd_scenario: lvm
+    lvm_volumes:
+      - data: ceph_lv_data
+        data_vg: ceph_vg
+        db: ceph_lv_db
+        db_vg: ceph_vg
+        wal: ceph_lv_wal
+        wal_vg: ceph_vg
   CephPoolDefaultPgNum: 32
   CephPoolDefaultSize: 1
   CephPools:
@@ -160,6 +173,13 @@ parameter_defaults:
   LoggingServers:
     - host: 127.0.0.1
       port: 24224
+  LoggingExtraSources:
+    - format: multiline
+      format_firstline: /(?<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d+) (?<pid>\d+) (?<priority>\S+) (?<component>\S+) (?<message> Traceback .*)$/
+      format1: /(?<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d+) (?<pid>\d+) (?<priority>\S+) (?<component>\S+) (?<message>  .*)$/
+      format2: /(?<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d+) (?<pid>\d+) (?<priority>\S+) (?<component>\S+) (?<traceback> \S.*)$/
+      path: /var/log/nova/nova-conductor.log
+      tag: openstack.nova.conductor.traceback
   MonitoringRabbitHost: 127.0.0.1
   MonitoringRabbitPort: 5676
   MonitoringRabbitPassword: sensu
@@ -171,3 +191,8 @@ parameter_defaults:
     - tty4
     - tty5
     - tty6
+  CephConfigOverrides:
+    global:
+      globalkey: globalvalue
+    osd:
+      osdkey: osdvalue

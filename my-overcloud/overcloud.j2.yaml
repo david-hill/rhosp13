@@ -197,6 +197,15 @@ parameters:
       doing an update which requires removal of specific resources.
       Example format ComputeRemovalPolicies: [{'resource_list': ['0']}]
 
+  {{role.name}}RemovalPoliciesMode:
+    default: append
+    type: string
+    description: >
+      How to handle change to RemovalPolicies for {{role.name}}
+      ResourceGroup when doing an update. Default mode 'append' will
+      append to the existing blacklist and 'update' would replace
+      the blacklist.
+
   {{role.name}}SchedulerHints:
     type: json
     description: Optional scheduler hints to pass to nova
@@ -391,13 +400,14 @@ resources:
 {% for role in roles %}
   # Resources generated for {{role.name}} Role
   {{role.name}}ServiceChain:
-    type: OS::TripleO::Services
+    type: OS::TripleO::{{role.name}}Services
     properties:
       Services:
         get_param: {{role.name}}Services
       ServiceNetMap: {get_attr: [ServiceNetMap, service_net_map]}
       ServiceData:
         net_cidr_map: {get_attr: [NetCidrMapValue, value]}
+        net_vip_map: {get_attr: [VipMap, net_ip_map]}
       EndpointMap: {get_attr: [EndpointMapData, value]}
       DefaultPasswords: {get_attr: [DefaultPasswords, passwords]}
       RoleName: {{role.name}}
@@ -514,7 +524,7 @@ resources:
     depends_on: {{role.name}}AllNodesDeployment
     properties:
       name: {{role.name}}AllNodesValidationDeployment
-      config: {get_resource: AllNodesValidationConfig}
+      config: {get_resource: {{role.name}}AllNodesValidationConfig}
       servers: {get_attr: [{{role.name}}Servers, value]}
 
   {{role.name}}IpListMap:
@@ -522,7 +532,7 @@ resources:
     properties:
       ControlPlaneIpList: {get_attr: [{{role.name}}, ip_address]}
 {%- for network in networks %}
-  {%- if network.enabled|default(true) %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
       {{network.name}}IpList: {get_attr: [{{role.name}}, {{network.name_lower}}_ip_address]}
   {%- else %}
       {{network.name}}IpList: {get_attr: [{{role.name}}, ip_address]}
@@ -556,6 +566,7 @@ resources:
     properties:
       count: {get_param: {{role.name}}Count}
       removal_policies: {get_param: {{role.name}}RemovalPolicies}
+      removal_policies_mode: {get_param: {{role.name}}RemovalPoliciesMode}
       resource_def:
         type: OS::TripleO::{{role.name}}
         properties:
@@ -676,21 +687,6 @@ resources:
 {% for role in roles %}
           - {get_attr: [{{role.name}}ServiceNames, value]}
 {% endfor %}
-      cellv2_discovery_hosts:
-        # Collects compute hostnames for all roles with a service that requires cellv2 host discovery
-        list_join:
-          - ','
-          - yaql:
-              expression: coalesce($.data.e.zip($.data.l).where($[0]).select($[1]).flatten(),  [])
-              data:
-                e: # list of true/fails for whether cellsv2 host discovery is required for the roles
-{%- for role in roles %}
-                  - {get_attr: [{{role.name}}ServiceChainRoleData, value, cellv2_discovery]}
-{%- endfor %}
-                l: # list of list of compute hostnames for the roles
-{%- for role in roles %}
-                  - {get_attr: [{{role.name}}, hostname_map, canonical]}
-{%- endfor %}
       controller_ips: {get_attr: [{{primary_role_name}}, ip_address]}
       controller_names: {get_attr: [{{primary_role_name}}, hostname]}
       service_ips:
@@ -824,18 +820,22 @@ resources:
     # ServiceNetMap's attribute values are available.
     depends_on: ServiceNetMap
 
+{%- for role in roles %}
   # All Nodes Validations
-  AllNodesValidationConfig:
+  {{role.name}}AllNodesValidationConfig:
     type: OS::TripleO::AllNodes::Validation
     properties:
       PingTestIps:
         list_join:
         - ' '
         -
-{%- for network in networks if network.enabled|default(true) %}
+{%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
           - yaql:
               expression: coalesce($.data, []).first(null)
-              data: {get_attr: [{{primary_role_name}}, {{network.name_lower}}_ip_address]}
+              data: {get_attr: [{{role.name}}, {{network.name_lower}}_ip_address]}
+  {%- endif %}
+{%- endfor %}
 {%- endfor %}
 
   UpdateWorkflow:

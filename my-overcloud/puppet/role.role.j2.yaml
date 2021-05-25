@@ -285,14 +285,18 @@ conditions:
         - {get_param: {{role.name}}NetworkDeploymentActions}
         - []
   ctlplane_fixed_ip_set:
-    not:
-      equals:
+    or:
+      - not:
+          equals:
+            - {get_param: [{{role.name}}IPs, 'ctlplane', {get_param: NodeIndex}]}
+            - ""
 {%- if role.deprecated_param_ips %}
-        - {get_param: [{{role.deprecated_param_ips}}, 'ctlplane', {get_param: NodeIndex}]}
-{%- else %}
-        - {get_param: [{{role.name}}IPs, 'ctlplane', {get_param: NodeIndex}]}
+      - not:
+          equals:
+            - {get_param: [{{role.deprecated_param_ips}}, 'ctlplane', {get_param: NodeIndex}]}
+            - ""
 {%- endif %}
-        - ""
+      - false  # NOTE(hjensas): Make sure 'or' get's 2 conditions or more
 
 resources:
   {{server_resource_name}}:
@@ -327,10 +331,13 @@ resources:
           - ctlplane_fixed_ip_set
           - network: ctlplane
             subnet: {get_param: {{role.name}}ControlPlaneSubnet}
+            fixed_ip:
+              yaql:
+                expression: $.data.where(not isEmpty($)).first()
+                data:
+                  - get_param: [{{role.name}}IPs, 'ctlplane', {get_param: NodeIndex}]
 {%- if role.deprecated_param_ips %}
-            fixed_ip: {get_param: [{{role.deprecated_param_ips}}, 'ctlplane', {get_param: NodeIndex}]}
-{%- else %}
-            fixed_ip: {get_param: [{{role.name}}IPs, 'ctlplane', {get_param: NodeIndex}]}
+                  - get_param: [{{role.deprecated_param_ips}}, 'ctlplane', {get_param: NodeIndex}]
 {%- endif %}
           - network: ctlplane
             subnet: {get_param: {{role.name}}ControlPlaneSubnet}
@@ -366,6 +373,8 @@ resources:
       parts:
       - config: {get_resource: NodeAdminUserData}
         type: multipart
+      - config: {get_resource: NodeTimesyncUserData}
+        type: multipart
       - config: {get_resource: NodeUserData}
         type: multipart
       - config: {get_resource: RoleUserData}
@@ -375,6 +384,12 @@ resources:
   # Should return a OS::Heat::MultipartMime reference via OS::stack_id
   NodeAdminUserData:
     type: OS::TripleO::NodeAdminUserData
+
+  # Bootstraps an ntp configuration and includes a hardware clock sync to
+  # for containers.
+  # Should return a OS::Heat::MultipartMime reference via OS::stack_id
+  NodeTimesyncUserData:
+    type: OS::TripleO::NodeTimesyncUserData
 
   # For optional operator additional userdata
   # Should return a OS::Heat::MultipartMime reference via OS::stack_id
@@ -387,6 +402,7 @@ resources:
     type: OS::TripleO::{{role.name}}::NodeUserData
 
   {%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
   {{network.name}}Port:
     type: OS::TripleO::{{role.name}}::Ports::{{network.name}}Port
     properties:
@@ -398,6 +414,7 @@ resources:
 {%- endif %}
           - {get_param: {{role.name}}IPs}
       NodeIndex: {get_param: NodeIndex}
+  {%- endif %}
   {%- endfor %}
 
   NetworkConfig:
@@ -405,7 +422,9 @@ resources:
     properties:
       ControlPlaneIp: {get_attr: [{{server_resource_name}}, networks, ctlplane, 0]}
   {%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
       {{network.name}}IpSubnet: {get_attr: [{{network.name}}Port, ip_subnet]}
+  {%- endif %}
   {%- endfor %}
 
   NetIpMap:
@@ -413,9 +432,11 @@ resources:
     properties:
       ControlPlaneIp: {get_attr: [{{server_resource_name}}, networks, ctlplane, 0]}
   {%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
       {{network.name}}Ip: {get_attr: [{{network.name}}Port, ip_address]}
       {{network.name}}IpSubnet: {get_attr: [{{network.name}}Port, ip_subnet]}
       {{network.name}}IpUri: {get_attr: [{{network.name}}Port, ip_address_uri]}
+  {%- endif %}
   {%- endfor %}
 
   NetHostMap:
@@ -424,6 +445,7 @@ resources:
       type: json
       value:
   {%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
         {{network.name_lower}}:
           fqdn:
             list_join:
@@ -436,6 +458,7 @@ resources:
             - '.'
             - - {get_attr: [{{server_resource_name}}, name]}
               - {{network.name.lower()}}
+  {%- endif %}
   {%- endfor %}
         ctlplane:
           fqdn:
@@ -485,42 +508,19 @@ resources:
             - {get_param: NetworkDeploymentActions}
           - []
 
-  {{server_resource_name}}UpgradeInitConfig:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: script
-      config:
-        list_join:
-        - ''
-        - - "#!/bin/bash\n\n"
-          - "if [[ -f /etc/resolv.conf.save ]] ; then rm /etc/resolv.conf.save; fi\n\n"
-          - get_param: UpgradeInitCommand
-          - get_param: UpgradeInitCommonCommand
-
-  # Note we may be able to make this conditional on UpgradeInitCommandNotEmpty
-  # but https://bugs.launchpad.net/heat/+bug/1649900 needs fixing first
-  {{server_resource_name}}UpgradeInitDeployment:
-    type: OS::Heat::SoftwareDeployment
-    depends_on: NetworkDeployment
-    properties:
-      name: {{server_resource_name}}UpgradeInitDeployment
-      server: {get_resource: {{server_resource_name}}}
-      config: {get_resource: {{server_resource_name}}UpgradeInitConfig}
-      actions:
-        if:
-          - server_not_blacklisted
-          - ['CREATE', 'UPDATE']
-          - []
-
   {{server_resource_name}}Deployment:
     type: OS::Heat::StructuredDeployment
-    depends_on: {{server_resource_name}}UpgradeInitDeployment
+    depends_on: NetworkDeployment
     properties:
       name: {{server_resource_name}}Deployment
       config: {get_resource: {{server_resource_name}}Config}
       server: {get_resource: {{server_resource_name}}}
       input_values:
-        enable_package_upgrade: {get_attr: [UpdateDeployment, update_managed_packages]}
+        enable_package_upgrade:
+          if:
+            - server_not_blacklisted
+            - {get_attr: [UpdateDeployment, update_managed_packages]}
+            - false
       actions:
         if:
           - server_not_blacklisted
@@ -539,6 +539,7 @@ resources:
           - config_step
           - {{role.name.lower()}}_extraconfig
           - extraconfig
+          - pci_passthrough_whitelist
           - service_names
           - service_configs
           - {{role.name.lower()}}
@@ -560,10 +561,7 @@ resources:
             service_names: {get_param: ServiceNames}
             sensu::subscriptions: {get_param: MonitoringSubscriptions}
           net_ip_map: {get_attr: [NetIpMap, net_ip_map]}
-          service_configs:
-            map_replace:
-              - {get_param: ServiceConfigSettings}
-              - values: {get_attr: [NetIpMap, net_ip_map]}
+          service_configs: {get_param: ServiceConfigSettings}
           {{role.name.lower()}}_extraconfig:
             map_merge:
 {%- if role.deprecated_param_extraconfig is defined %}
@@ -577,7 +575,9 @@ resources:
             tripleo::profile::base::logging::fluentd::fluentd_groups: {get_param: LoggingGroups}
             tripleo::clouddomain: {get_param: CloudDomain}
   {%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
             fqdn_{{network.name_lower}}: {get_attr: [NetHostMap, value, {{network.name_lower}}, fqdn]}
+  {%- endif %}
   {%- endfor %}
             fqdn_ctlplane: {get_attr: [NetHostMap, value, ctlplane, fqdn]}
             fqdn_canonical: {get_attr: [NetHostMap, value, canonical, fqdn]}
@@ -589,8 +589,9 @@ resources:
     properties:
       server: {get_resource: {{server_resource_name}}}
 
-  {%- if 'primary' in role.tags and 'controller' in role.tags %}
+  {%- if 'controller' in role.tags %}
   # Resource for site-specific passing of private keys/certificates
+  # Note: this resource is needed everywhere HAproxy is deployed.
   NodeTLSData:
     depends_on: NodeTLSCAData
     type: OS::TripleO::NodeTLSData
@@ -614,7 +615,7 @@ resources:
   NodeExtraConfig:
     depends_on:
       - {{role.name}}ExtraConfigPre
-  {%- if 'primary' in role.tags and 'controller' in role.tags %}
+  {%- if 'controller' in role.tags %}
       - NodeTLSData
   {%- else %}
       - NodeTLSCAData
@@ -666,18 +667,23 @@ resources:
     properties:
       value:
         str_replace:
-          template: "PRIMARYIP,PRIMARYHOST.DOMAIN,PRIMARYHOST,\
+          template: "[PRIMARYIP]*,[PRIMARYHOST.DOMAIN]*,[PRIMARYHOST]*,\
     {%- for network in networks %}
-  {{network.name}}IP,{{network.name}}HOST.DOMAIN,{{network.name}}HOST,\
+    {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
+    [{{network.name}}IP]*,[{{network.name}}HOST.DOMAIN]*,\
+    [{{network.name}}HOST]*,\
+    {%- endif %}
     {%- endfor %}
-  CTLPLANEIP,CTLPLANEHOST.DOMAIN,CTLPLANEHOST"
+    [CTLPLANEIP]*,[CTLPLANEHOST.DOMAIN]*,[CTLPLANEHOST]*"
           params:
             PRIMARYIP: {get_attr: [NetIpMap, net_ip_map, {get_param: [ServiceNetMap, {{role.name}}HostnameResolveNetwork]}]}
             DOMAIN: {get_param: CloudDomain}
             PRIMARYHOST: {get_attr: [{{server_resource_name}}, name]}
     {%- for network in networks %}
+    {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
             {{network.name}}IP: {get_attr: [{{network.name}}Port, ip_address]}
             {{network.name}}HOST: {get_attr: [NetHostMap, value, {{network.name_lower|default(network.name.lower())}}, short]}
+    {%- endif %}
     {%- endfor %}
             CTLPLANEIP: {get_attr: [{{server_resource_name}}, networks, ctlplane, 0]}
             CTLPLANEHOST: {get_attr: [NetHostMap, value, ctlplane, short]}
@@ -707,7 +713,9 @@ outputs:
     description: Mapping of network names to hostnames
     value:
   {%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
       {{network.name_lower|default(network.name.lower())}}: {get_attr: [NetHostMap, value, {{network.name_lower|default(network.name.lower()) }}, fqdn]}
+  {%- endif %}
   {%- endfor %}
       ctlplane: {get_attr: [NetHostMap, value, ctlplane, fqdn]}
       canonical: {get_attr: [NetHostMap, value, canonical, fqdn]}
@@ -717,7 +725,9 @@ outputs:
         template: |
           PRIMARYIP PRIMARYHOST.DOMAIN PRIMARYHOST
   {%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
           {{network.name}}IP {{network.name}}HOST.DOMAIN {{network.name}}HOST
+  {%- endif %}
   {%- endfor %}
           CTLPLANEIP CTLPLANEHOST.DOMAIN CTLPLANEHOST
         params:
@@ -725,8 +735,10 @@ outputs:
           DOMAIN: {get_param: CloudDomain}
           PRIMARYHOST: {get_attr: [{{server_resource_name}}, name]}
   {%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
           {{network.name}}IP: {get_attr: [{{network.name}}Port, ip_address]}
           {{network.name}}HOST: {get_attr: [NetHostMap, value, {{network.name_lower|default(network.name.lower())}}, short]}
+  {%- endif %}
   {%- endfor %}
           CTLPLANEIP: {get_attr: [{{server_resource_name}}, networks, ctlplane, 0]}
           CTLPLANEHOST: {get_attr: [NetHostMap, value, ctlplane, short]}
@@ -788,7 +800,7 @@ outputs:
                     - 6
                 - 0
         - keys: {hostname: {get_param: Hostname}}
-  {%- if 'primary' in role.tags and 'controller' in role.tags %}
+  {%- if 'controller' in role.tags %}
   tls_key_modulus_md5:
     description: MD5 checksum of the TLS Key Modulus
     value: {get_attr: [NodeTLSData, key_modulus_md5]}
@@ -800,7 +812,9 @@ outputs:
     description: The os-collect-config configuration associated with this server resource
     value: {get_attr: [{{server_resource_name}}, os_collect_config]}
   {%- for network in networks %}
+  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
   {{network.name_lower|default(network.name.lower())}}_ip_address:
     description: IP address of the server in the {{network.name}} network
     value: {get_attr: [{{network.name}}Port, ip_address]}
+  {%- endif %}
   {%- endfor %}

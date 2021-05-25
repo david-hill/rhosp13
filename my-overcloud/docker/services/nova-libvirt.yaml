@@ -12,6 +12,10 @@ parameters:
   DockerNovaLibvirtConfigImage:
     description: The container image to use for the nova_libvirt config_volume
     type: string
+  ContainerNovaLibvirtUlimit:
+    default: ['nofile=131072', 'nproc=126960']
+    description: ulimit for Nova Libvirt Container
+    type: comma_delimited_list
   ServiceData:
     default: {}
     description: Dictionary packing service data
@@ -54,8 +58,10 @@ parameters:
     type: number
   NovaEnableRbdBackend:
     default: false
-    description: Whether to enable or not the Rbd backend for Nova
+    description: Whether to enable the Rbd backend for Nova ephemeral storage.
     type: boolean
+    tags:
+      - role_specific
   CinderEnableRbdBackend:
     default: false
     description: Whether to enable or not the Rbd backend for Cinder
@@ -64,6 +70,8 @@ parameters:
     description: The Ceph client key. Can be created with ceph-authtool --gen-print-key.
     type: string
     hidden: true
+    constraints:
+    - allowed_pattern: "^[a-zA-Z0-9+/]{38}==$"
   CephClusterFSID:
     type: string
     description: The Ceph cluster FSID. Must be a UUID.
@@ -85,11 +93,21 @@ parameters:
     description: If set to true and if EnableInternalTLS is enabled, it will
                  enable TLS transaport for libvirt VNC and configure the
                  relevant keys for libvirt.
+  UseTLSTransportForNbd:
+    type: boolean
+    default: false
+    description: If set to true and if EnableInternalTLS is enabled, it will
+                 enable TLS transaport for libvirt NBD and configure the
+                 relevant keys for libvirt.
   InternalTLSCAFile:
     default: '/etc/ipa/ca.crt'
     type: string
     description: Specifies the default CA cert to use if TLS is used for
                  services in the internal network.
+  InternalTLSNbdCAFile:
+    default: '/etc/pki/qemu/ca-cert.pem'
+    type: string
+    description: Specifies the CA cert to use for NBD TLS.
   InternalTLSVncCAFile:
     default: '/etc/pki/CA/certs/vnc.crt'
     type: string
@@ -116,6 +134,16 @@ parameters:
                  the InternalTLSVncCAFile parameter) is not desired. The current
                  default reflects TripleO's default CA, which is FreeIPA.
                  It will only be used if internal TLS is enabled.
+  LibvirtNbdCACert:
+    type: string
+    default: ''
+    description: This specifies the CA certificate to use for NBD TLS.
+                 This file will be symlinked to the default CA path,
+                 which is /etc/pki/libvirt-nbd/ca-cert.pem.
+                 This parameter should be used if the default (which comes from
+                 the InternalTLSNbdCAFile parameter) is not desired. The current
+                 default reflects TripleO's default CA, which is FreeIPA.
+                 It will only be used if internal TLS is enabled.
   VhostuserSocketGroup:
     default: "qemu"
     description: >
@@ -123,6 +151,12 @@ parameters:
       Defaults to 'qemu'. When vhostuser mode is 'dpdkvhostuserclient'
       (which is the default mode), the vhost socket is created by qemu.
     type: string
+    tags:
+      - role_specific
+  ContainerCpusetCpus:
+    description: Limit the specific CPUs or cores a container can use.
+    type: string
+    default: 'all'
     tags:
       - role_specific
 
@@ -144,12 +178,19 @@ conditions:
 
   need_libvirt_secret:
     or:
-    - equals:
-      - {get_param: NovaEnableRbdBackend}
-      - true
-    - equals:
-      - {get_param: CinderEnableRbdBackend}
-      - true
+      - equals:
+        - {get_param: [RoleParameters, NovaEnableRbdBackend]}
+        - true
+      - and:
+        - equals:
+          - {get_param: [RoleParameters, NovaEnableRbdBackend]}
+          - ''
+        - equals:
+          - {get_param: NovaEnableRbdBackend}
+          - true
+      - equals:
+        - {get_param: CinderEnableRbdBackend}
+        - true
 
   use_tls_for_vnc:
     and:
@@ -165,6 +206,24 @@ conditions:
       - {get_param: LibvirtVncCACert}
       - ''
 
+  use_tls_for_nbd:
+    and:
+    - equals:
+      - {get_param: EnableInternalTLS}
+      - true
+    - equals:
+      - {get_param: UseTLSTransportForNbd}
+      - true
+
+  libvirt_nbd_specific_ca_unset:
+    equals:
+      - {get_param: LibvirtNbdCACert}
+      - ''
+
+  docker_enabled:
+    equals:
+      - {get_param: ContainerCli}
+      - 'docker'
 
 resources:
   RoleParametersValue:
@@ -175,9 +234,11 @@ resources:
         map_replace:
           - map_replace:
             - vhostuser_socket_group: VhostuserSocketGroup
+              container_cpuset_cpus: ContainerCpusetCpus
             - values: {get_param: [RoleParameters]}
           - values:
               VhostuserSocketGroup: {get_param: VhostuserSocketGroup}
+              ContainerCpusetCpus: {get_param: ContainerCpusetCpus}
 
 
   ContainersCommon:
@@ -208,7 +269,6 @@ outputs:
         map_merge:
           - get_attr: [NovaLibvirtBase, role_data, config_settings]
           - get_attr: [NovaLibvirtLogging, config_settings]
-          - tripleo::profile::base::certmonger_user::libvirt_postsave_cmd: "true" # TODO: restart the libvirt container here
 
       logging_source: {get_attr: [NovaLibvirtBase, role_data, logging_source]}
       logging_groups: {get_attr: [NovaLibvirtBase, role_data, logging_groups]}
@@ -244,14 +304,6 @@ outputs:
                   dest: "/etc/ceph/"
                   merge: true
                   preserve_properties: true
-              - if:
-                - use_tls_for_vnc
-                -
-                  - source: /var/lib/kolla/config_files/src-libvirt-vnc-pki/server-*.pem
-                    dest: /etc/pki/libvirt-vnc/
-                    merge: true
-                    preserve_properties: true
-                - null
           permissions:
             list_concat:
               -
@@ -264,11 +316,20 @@ outputs:
                   owner: nova:nova
                   perm: '0600'
               - if:
-                - use_tls_for_vnc
+                - use_tls_for_nbd
                 -
-                  - path: /etc/pki/libvirt-vnc/server-key.pem
+                  - path: /etc/pki/libvirt-nbd/client-key.pem
                     owner: root:qemu
                     perm: '0640'
+                  - path: /etc/pki/qemu/server-key.pem
+                    owner: root:qemu
+                    perm: '0640'
+                  - path: /etc/pki/qemu/ca-cert.pem
+                    owner: root:root
+                    perm: '0644'
+                  - path: /etc/pki/CA/certs/qemu.pem
+                    owner: root:root
+                    perm: '0644'
                 - null
         /var/lib/kolla/config_files/nova_virtlogd.json:
           command: /usr/sbin/virtlogd --config /etc/libvirt/virtlogd.conf
@@ -282,6 +343,7 @@ outputs:
           nova_virtlogd:
             start_order: 0
             image: {get_param: DockerNovaLibvirtImage}
+            ulimit: {get_param: ContainerNovaLibvirtUlimit}
             net: host
             pid: host
             privileged: true
@@ -297,7 +359,7 @@ outputs:
                   - /run:/run
                   - /sys/fs/cgroup:/sys/fs/cgroup
                   - /var/lib/nova:/var/lib/nova:shared
-                  - /var/run/libvirt:/var/run/libvirt
+                  - /var/run/libvirt:/var/run/libvirt:shared
                   - /var/lib/libvirt:/var/lib/libvirt
                   - /etc/libvirt/qemu:/etc/libvirt/qemu:ro
                   - /var/log/libvirt/qemu:/var/log/libvirt/qemu
@@ -306,10 +368,12 @@ outputs:
           nova_libvirt:
             start_order: 1
             image: {get_param: DockerNovaLibvirtImage}
+            ulimit: {get_param: ContainerNovaLibvirtUlimit}
             net: host
             pid: host
             privileged: true
             restart: always
+            cpuset_cpus: {get_attr: [RoleParametersValue, value, container_cpuset_cpus]}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -333,32 +397,41 @@ outputs:
                   if:
                     - use_tls_for_live_migration
                     -
+                      - /etc/pki/libvirt:/etc/pki/libvirt/:ro
+                      - /etc/pki/libvirt-nbd:/etc/pki/libvirt-nbd:ro
                       - str_replace:
-                          template: "CACERT:/var/lib/kolla/config_files/src-tls/etc/pki/CA/cacert.pem:ro"
+                          template: "CACERT:/etc/pki/CA/cacert.pem:ro"
                           params:
                             CACERT:
                               if:
                                 - libvirt_specific_ca_unset
                                 - get_param: InternalTLSCAFile
                                 - get_param: LibvirtCACert
-                      - /etc/pki/libvirt/servercert.pem:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt/servercert.pem:ro
-                      - /etc/pki/libvirt/private/serverkey.pem:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt/private/serverkey.pem:ro
-                      - /etc/pki/libvirt/clientcert.pem:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt/clientcert.pem:ro
-                      - /etc/pki/libvirt/private/clientkey.pem:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt/private/clientkey.pem:ro
+                      - str_replace:
+                          template: "CACERT:/etc/pki/qemu/ca-cert.pem:ro"
+                          params:
+                            CACERT:
+                              if:
+                                - libvirt_nbd_specific_ca_unset
+                                - get_param: InternalTLSNbdCAFile
+                                - get_param: LibvirtNbdCACert
+                      - /etc/pki/qemu/server-cert.pem:/etc/pki/qemu/server-cert.pem:ro
+                      - /etc/pki/qemu/server-key.pem:/etc/pki/qemu/server-key.pem:ro
                     - null
                 -
                   if:
                     - use_tls_for_vnc
                     -
+                      - /etc/pki/libvirt-vnc/server-cert.pem:/etc/pki/libvirt-vnc/server-cert.pem:ro
+                      - /etc/pki/libvirt-vnc/server-key.pem:/etc/pki/libvirt-vnc/server-key.pem:ro
                       - str_replace:
-                          template: "CACERT:/var/lib/kolla/config_files/src-tls/etc/pki/libvirt-vnc/ca-cert.pem:ro"
+                          template: "CACERT:/etc/pki/libvirt-vnc/ca-cert.pem:ro"
                           params:
                             CACERT:
                               if:
                                 - libvirt_vnc_specific_ca_unset
                                 - get_param: InternalTLSVncCAFile
                                 - get_param: LibvirtVncCACert
-                      - /etc/pki/libvirt-vnc:/var/lib/kolla/config_files/src-libvirt-vnc-pki:ro
                     - null
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
@@ -398,6 +471,9 @@ outputs:
             - /etc/libvirt/qemu
             - /var/lib/libvirt
             - /var/log/containers/libvirt
+            - /var/run/libvirt
+            - /var/log/libvirt
+            - /var/log/libvirt/qemu
         # qemu user on host will be cretaed by libvirt package install, ensure
         # the qemu user created with same uid/gid as like libvirt package.
         # These specific values are required since ovs is running on host.
@@ -441,6 +517,11 @@ outputs:
             - libvirtd.service
             - virtlogd.socket
           when: libvirt_installed.rc == 0
+        - name: ensure /var/run/libvirt is present upon reboot
+          copy:
+            dest: /etc/tmpfiles.d/var-run-libvirt.conf
+            content: |
+              d /var/run/libvirt 0755 root root - -
       metadata_settings:
         get_attr: [NovaLibvirtBase, role_data, metadata_settings]
       upgrade_tasks:
@@ -454,10 +535,6 @@ outputs:
             - name: Set fact nova_libvirt_enabled
               set_fact:
                 nova_libvirt_enabled: "{{ nova_libvirt_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service libvirtd is running"
-              command: systemctl is-active --quiet libvirtd
-              tags: validation
-              when: nova_libvirt_enabled|bool
         - when: step|int == 2
           block:
             - name: Stop and disable libvirtd service

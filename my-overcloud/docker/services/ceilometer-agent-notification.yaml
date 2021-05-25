@@ -40,6 +40,10 @@ parameters:
     default: false
     description: Remove package if the service is being disabled during upgrade
     type: boolean
+  CeilometerEnablePanko:
+    default: true
+    description: Check if panko need to be enabled or not.
+    type: boolean
 
 resources:
 
@@ -55,6 +59,9 @@ resources:
       DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
+
+conditions:
+  ceilometer_enable_panko: {equals: [{get_param: CeilometerEnablePanko}, True]}
 
 outputs:
   role_data:
@@ -74,20 +81,29 @@ outputs:
         config_image: {get_param: DockerCeilometerConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/ceilometer_agent_notification.json:
-          command: /usr/bin/ceilometer-agent-notification --logfile /var/log/ceilometer/agent-notification.log
-          config_files:
-            - source: "/var/lib/kolla/config_files/src/*"
-              dest: "/"
-              merge: true
-              preserve_properties: true
-            - source: "/var/lib/kolla/config_files/src-panko/*"
-              dest: "/"
-              merge: true
-              preserve_properties: true
-          permissions:
-            - path: /etc/panko
-              owner: root:ceilometer
-              recurse: true
+          map_merge:
+            - command: /usr/bin/ceilometer-agent-notification --logfile /var/log/ceilometer/agent-notification.log
+              config_files:
+                list_concat:
+                  - - source: "/var/lib/kolla/config_files/src/*"
+                      dest: "/"
+                      merge: true
+                      preserve_properties: true
+                  - if:
+                      - ceilometer_enable_panko
+                      - - source: "/var/lib/kolla/config_files/src-panko/*"
+                          dest: "/"
+                          merge: true
+                          preserve_properties: true
+                      - null
+            - if:
+              - ceilometer_enable_panko
+              - permissions:
+                  - path: /etc/panko
+                    owner: root:ceilometer
+                    recurse: true
+              - {}
+
       docker_config:
         step_3:
           ceilometer_init_log:
@@ -104,22 +120,37 @@ outputs:
             privileged: false
             restart: always
             healthcheck:
-              test: /openstack/healthcheck
+              test:
+                list_join:
+                  - ' '
+                  - - '/openstack/healthcheck'
+                    - yaql:
+                        expression: str($.data.port)
+                        data:
+                          port: {get_attr: [CeilometerAgentNotificationBase, role_data, config_settings, 'ceilometer::rabbit_port']}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/ceilometer_agent_notification.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/ceilometer/:/var/lib/kolla/config_files/src:ro
-                  - /var/lib/config-data/puppet-generated/panko/:/var/lib/kolla/config_files/src-panko:ro
-                  - /var/log/containers/ceilometer:/var/log/ceilometer
+                  - /var/lib/config-data/puppet-generated/ceilometer:/var/lib/kolla/config_files/src:ro
+                  - /var/log/containers/ceilometer:/var/log/ceilometer:z
+                - if:
+                  - ceilometer_enable_panko
+                  - - /var/lib/config-data/puppet-generated/panko:/var/lib/kolla/config_files/src-panko:ro
+                  - []
+
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent logs directory
+        - name: create persistent directories
           file:
-            path: /var/log/containers/ceilometer
+            path: "{{ item.path }}"
             state: directory
+            setype: "{{ item.setype }}"
+          with_items:
+            - { 'path': /var/log/containers/ceilometer, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/ceilometer, 'setype': svirt_sandbox_file_t }
         - name: ceilometer logs readme
           copy:
             dest: /var/log/ceilometer/readme.txt
@@ -138,10 +169,6 @@ outputs:
             - name: Set fact ceilometer_agent_notification_enabled
               set_fact:
                 ceilometer_agent_notification_enabled: "{{ ceilometer_agent_notification_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-ceilometer-notification is running"
-              command: systemctl is-active --quiet openstack-ceilometer-notification
-              when: ceilometer_agent_notification_enabled|bool
-              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable ceilometer agent notification service

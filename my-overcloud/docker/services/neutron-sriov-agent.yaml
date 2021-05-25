@@ -10,6 +10,10 @@ parameters:
   DockerNeutronConfigImage:
     description: The container image to use for the neutron config_volume
     type: string
+  DockerSRIOVUlimit:
+    default: ['nofile=16384']
+    description: ulimit for SR-IOV Container
+    type: comma_delimited_list
   ServiceData:
     default: {}
     description: Dictionary packing service data
@@ -36,6 +40,21 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
+  DerivePciWhitelistEnabled:
+    default: true
+    description: Whether to enable or not the pci passthrough whitelist automation.
+    type: boolean
+    tags:
+      - role_specific
+
+conditions:
+
+  derive_pci_whitelist_enabled:
+    or:
+      - and:
+        - equals: [{get_param: DerivePciWhitelistEnabled}, true]
+        - equals: [{get_param: [RoleParameters, DerivePciWhitelistEnabled]}, '']
+      - equals: [{get_param: [RoleParameters, DerivePciWhitelistEnabled]}, true]
 
 resources:
 
@@ -97,6 +116,7 @@ outputs:
             pid: host
             privileged: true
             restart: always
+            ulimit: {get_param: DockerSRIOVUlimit}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -109,7 +129,36 @@ outputs:
                   - /sys/class/net:/sys/class/net:rw
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
-      host_prep_tasks: {get_attr: [NeutronLogging, host_prep_tasks]}
+      host_prep_tasks:
+        list_concat:
+          - {get_attr: [NeutronLogging, host_prep_tasks]}
+          - - if:
+                - derive_pci_whitelist_enabled
+                - - name: "creating directory"
+                    file:
+                      state: directory
+                      path: /var/lib/pci_passthrough_whitelist_scripts
+                      owner: root
+                      group: root
+                      mode: 0750
+                  # in queens, ansible "host_tasks" are executed inside the overcloud node via os-collect-config
+                  # in later versions (with config download), ansible is executed from the undercloud
+                  # so in queens, abosolute path in the undercloud cannot be provided, instead file content is copied
+                  - name: derive pci passthrough whitelist
+                    copy:
+                      content:
+                        str_replace:
+                          template: |
+                            {% raw -%}
+                            _DERIVE_CONTENT_
+                            {% endraw %}
+                          params:
+                            _DERIVE_CONTENT_: {get_file: ./derive_pci_passthrough_whitelist.py}
+                      dest: /var/lib/pci_passthrough_whitelist_scripts/derive_pci_passthrough_whitelist.py
+                      mode: 0700
+                  - name: run derive_pci_passthrough_whitelist.py
+                    command:  /var/lib/pci_passthrough_whitelist_scripts/derive_pci_passthrough_whitelist.py
+                - []
       metadata_settings:
         get_attr: [NeutronSriovAgentBase, role_data, metadata_settings]
       upgrade_tasks:
@@ -123,10 +172,6 @@ outputs:
             - name: Set fact neutron_sriov_nic_agent_enabled
               set_fact:
                 neutron_sriov_nic_agent_enabled: "{{ neutron_sriov_nic_agent_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service neutron-sriov-nic-agent is running"
-              command: systemctl is-active --quiet neutron-sriov-nic-agent
-              when: neutron_sriov_nic_agent_enabled|bool
-              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable neutron_sriov_agent service

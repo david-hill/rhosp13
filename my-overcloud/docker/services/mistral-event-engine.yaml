@@ -97,7 +97,14 @@ outputs:
             privileged: false
             restart: always
             healthcheck:
-              test: /openstack/healthcheck
+              test:
+                list_join:
+                  - ' '
+                  - - '/openstack/healthcheck'
+                    - yaql:
+                        expression: str($.data.port)
+                        data:
+                          port: {get_attr: [MistralBase, role_data, config_settings, 'mistral::rabbit_port']}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
@@ -109,10 +116,14 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
-        - name: create persistent logs directory
+        - name: create persistent directories
           file:
-            path: /var/log/containers/mistral
+            path: "{{ item.path }}"
             state: directory
+            setype: "{{ item.setype }}"
+          with_items:
+            - { 'path': /var/log/containers/mistral, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/mistral, 'setype': svirt_sandbox_file_t }
         - name: mistral logs readme
           copy:
             dest: /var/log/mistral/readme.txt
@@ -131,10 +142,6 @@ outputs:
             - name: Set fact mistral_event_engine_enabled
               set_fact:
                 mistral_event_engine_enabled: "{{ mistral_event_engine_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check if openstack-mistral-event-engine is running"
-              command: systemctl is-active --quiet openstack-mistral-event-engine
-              when: mistral_event_engine_enabled|bool
-              tags: validation
         - when: step|int == 2
           block:
             - name: Stop and disable mistral_event_engine service

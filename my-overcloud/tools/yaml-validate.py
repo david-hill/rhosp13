@@ -13,15 +13,16 @@
 
 import argparse
 import os
+import re
 import sys
 import traceback
 import yaml
 
+from copy import copy
+
 # Only permit the template alias versions
 # The current template version should be the last element
 valid_heat_template_versions = [
-  'ocata',
-  'pike',
   'queens',
 ]
 current_heat_template_version = valid_heat_template_versions[-1]
@@ -44,6 +45,7 @@ OPTIONAL_SECTIONS = ['workflow_tasks', 'cellv2_discovery']
 REQUIRED_DOCKER_SECTIONS = ['service_name', 'docker_config', 'puppet_config',
                             'config_settings']
 OPTIONAL_DOCKER_SECTIONS = ['docker_puppet_tasks', 'upgrade_tasks',
+                            'deploy_steps_tasks',
                             'pre_upgrade_rolling_tasks',
                             'fast_forward_upgrade_tasks',
                             'fast_forward_post_upgrade_tasks',
@@ -53,7 +55,8 @@ OPTIONAL_DOCKER_SECTIONS = ['docker_puppet_tasks', 'upgrade_tasks',
                             'kolla_config', 'global_config_settings',
                             'logging_source', 'logging_groups',
                             'external_deploy_tasks', 'external_post_deploy_tasks',
-                            'docker_config_scripts', 'step_config']
+                            'docker_config_scripts', 'step_config',
+                            'monitoring_subscription']
 # ansible tasks cannot be an empty dict or ansible is unhappy
 ANSIBLE_TASKS_SECTIONS = ['upgrade_tasks', 'pre_upgrade_rolling_tasks',
                           'fast_forward_upgrade_tasks',
@@ -115,10 +118,10 @@ PARAMETER_DEFINITION_EXCLUSIONS = {'CephPools': ['description',
                                                                'constraints'],
                                    # NOTE(anil): This is a temporary change and
                                    # will be removed once bug #1767070 properly
-                                   # fixed. OVN supports only VLAN and geneve
-                                   # for NeutronNetworkType. But VLAN tenant
-                                   # networks have a limited support in OVN.
-                                   # Till that is fixed, we restrict
+                                   # fixed. OVN supports only VLAN, geneve
+                                   # and flat for NeutronNetworkType. But VLAN
+                                   # tenant networks have a limited support
+                                   # in OVN. Till that is fixed, we restrict
                                    # NeutronNetworkType to 'geneve'.
                                    'NeutronNetworkType': ['description',
                                                           'default',
@@ -155,6 +158,7 @@ PARAMETER_DEFINITION_EXCLUSIONS = {'CephPools': ['description',
 PREFERRED_CAMEL_CASE = {
     'ec2api': 'Ec2Api',
     'haproxy': 'HAProxy',
+    'metrics-qdr': 'MetricsQdr'
 }
 
 # Overrides for docker/puppet validation
@@ -184,6 +188,10 @@ DEPLOYMENT_RESOURCE_TYPES = [
 ]
 
 VALID_ANSIBLE_UPGRADE_TAGS = [ 'common', 'validation', 'pre-upgrade' ]
+
+ANSIBLE_TASKS_YAMLS = [
+    './extraconfig/pre_network/boot_param_tasks.yaml'
+]
 
 def exit_usage():
     print('Usage %s <yaml file or directory>' % sys.argv[0])
@@ -345,7 +353,7 @@ def validate_controller_no_ceph_role(filename, tpl):
                 return 1
     return 0
 
-def validate_with_compute_role_services(role_filename, role_tpl, exclude_service):
+def validate_with_compute_role_services(role_filename, role_tpl, exclude_service=()):
     cmpt_filename = os.path.join(os.path.dirname(role_filename),
                                  './Compute.yaml')
     cmpt_tpl = yaml.load(open(cmpt_filename).read())
@@ -359,8 +367,48 @@ def validate_with_compute_role_services(role_filename, role_tpl, exclude_service
               'ServicesDefault in roles/Compute.yaml'.format(role_filename,
               ', '.join(missing_services)))
         return 1
+
+    cmpt_us = cmpt_tpl[0].get('update_serial', None)
+    tpl_us = role_tpl[0].get('update_serial', None)
+
+    if 'OS::TripleO::Services::CephOSD' in role_services:
+        if tpl_us not in (None, 1):
+            print('ERROR: update_serial in {0} ({1}) '
+                  'is should be 1 as it includes CephOSD'.format(
+                      role_filename,
+                      tpl_us,
+                      cmpt_us))
+            return 1
+    elif cmpt_us is not None and tpl_us != cmpt_us:
+        print('ERROR: update_serial in {0} ({1}) '
+              'does not match roles/Compute.yaml {2}'.format(
+                  role_filename,
+                  tpl_us,
+                  cmpt_us))
+        return 1
+
     return 0
 
+    cmpt_us = cmpt_tpl[0].get('update_serial', None)
+    tpl_us = role_tpl[0].get('update_serial', None)
+
+    if 'OS::TripleO::Services::CephOSD' in role_services:
+        if tpl_us not in (None, 1):
+            print('ERROR: update_serial in {0} ({1}) '
+                  'is should be 1 as it includes CephOSD'.format(
+                      role_filename,
+                      tpl_us,
+                      cmpt_us))
+            return 1
+    elif cmpt_us is not None and tpl_us != cmpt_us:
+        print('ERROR: update_serial in {0} ({1}) '
+              'does not match roles/Compute.yaml {2}'.format(
+                  role_filename,
+                  tpl_us,
+                  cmpt_us))
+        return 1
+
+    return 0
 
 def validate_multiarch_compute_roles(role_filename, role_tpl):
     errors = 0
@@ -389,7 +437,6 @@ def validate_multiarch_compute_roles(role_filename, role_tpl):
             errors = 1
 
     return errors
-
 
 def search(item, check_item, check_key):
     if check_item(item):
@@ -667,6 +714,181 @@ def validate_service(filename, tpl):
     return 0
 
 
+def _rsearch_keys(d, pattern, search_keynames=False, enter_lists=False):
+    """ Deep regex search through a dict for k or v matching a pattern
+
+    Returns a list of the matched parent keys. Nested keypaths are
+    represented as lists. Looks for either values (default) or keys mathching
+    the search pattern. A key name may also be joined an integer index, when
+    the matched value belongs to a list and enter_lists is enabled.
+
+    Example:
+
+    >>> example_dict = { 'key1' : [ 'value1', { 'key1': 'value2' } ],
+                         'key2' : 'value2',
+                         'key3' : { 'key3a': 'value3a' },
+                         'key4' : { 'key4a': { 'key4aa': 'value4aa',
+                                               'key4ab': 'value4ab',
+                                               'key4ac': 'value1'},
+                                    'key4b': 'value4b'} }
+    >>>_rsearch_keys(example_dict, 'value1', search_keynames=False,
+                     enter_lists=True)
+    [['key1', 0], ['key4', 'key4a', 'key4ac']]
+    >>> _rsearch_keys(example_dict, 'key4aa', search_keynames=True)
+    [['key4', 'key4a', 'key4aa']]
+    >>> _rsearch_keys(example_dict, 'key1', True, True)
+    [['key1', 1, 'key1']]
+
+    """
+    def _rsearch_keys_nested(d, pattern, search_keynames=False,
+                             enter_lists=False, workset=None, path=None):
+        if path is None:
+            path = []
+        # recursively walk through the dict, optionally entering lists
+        if isinstance(d, dict):
+            for k, v in d.items():
+                path.append(k)
+                if (isinstance(v, dict) or enter_lists and
+                    isinstance(v, list)):
+                    # results are accumulated in the upper scope result var
+                    _rsearch_keys_nested(v, pattern, search_keynames,
+                                         enter_lists, result, path)
+
+                if search_keynames:
+                    target = str(k)
+                else:
+                    target = str(v)
+
+                if re.search(pattern, target):
+                    present = False
+                    for entry in result:
+                        if set(path).issubset(set(entry)):
+                            present = True
+                            break
+                    if not present:
+                        result.append(copy(path))
+
+                path.pop()
+
+        if enter_lists and isinstance(d, list):
+            for ind in range(len(d)):
+                path.append(ind)
+                if (isinstance(d[ind], dict) or
+                    enter_lists and isinstance(d[ind], list)):
+                    _rsearch_keys_nested(d[ind], pattern, search_keynames,
+                                         enter_lists, result, path)
+                if re.search(pattern, str(d[ind])):
+                    present = False
+                    for entry in result:
+                        if set(path).issubset(set(entry)):
+                            present = True
+                            break
+                    if not present:
+                        result.append(copy(path))
+
+                path.pop()
+
+        return result
+
+    result = []
+    return _rsearch_keys_nested(d, pattern, search_keynames, enter_lists)
+
+def _get(d, path):
+    """ Get a value (or None) from a dict by path given as a list
+
+    Integer values represent indexes in lists, string values are for dict keys
+    """
+    if not isinstance(path, list):
+        raise LookupError("The path needs to be a list")
+    for step in path:
+        try:
+            d = d[step]
+        except KeyError:
+            return None
+    return d
+
+def validate_service_hiera_interpol(f, tpl):
+    """  Validate service templates for hiera interpolation rules
+
+    Find all {get_param: [ServiceNetMap, ...]} missing hiera
+    interpolation of IP addresses or network ranges vs
+    the names of the networks, which needs no interpolation
+    """
+    def _getindex(lst, element):
+        try:
+            pos = lst.index(element)
+            return pos
+        except ValueError:
+            return None
+
+    if 'ansible' in f or 'endpoint_map' in f:
+        return 0
+
+    failed = False
+    search_keynames = False
+    enter_lists = True
+    if 'outputs' in tpl and 'role_data' in tpl['outputs']:
+        values_found = _rsearch_keys(tpl['outputs']['role_data'],
+                                     'ServiceNetMap',
+                                     search_keynames, enter_lists)
+        for path in values_found:
+            # Omit if not a part of {get_param: [ServiceNetMap ...
+            if not enter_lists and path[-1] != 'get_param':
+                continue
+            if enter_lists and path[-1] != 0 and path[-2] != 'get_param':
+                continue
+
+            path_str = ';'.join(str(x) for x in path)
+            # NOTE(bogdando): Omit foo_network keys looking like a network
+            # name. The only exception is allow anything under
+            # str_replace['params'] ('str_replace;params' in the str notation).
+            # We need to escape because of '$' char may be in templated params.
+            query = re.compile(r'\\;str\\_replace\\;params\\;\S*?net',
+                               re.IGNORECASE)
+            if not query.search(re.escape(path_str)):
+                # Keep parsing, if foo_vip_network, or anything
+                # else that looks like a keystore for an IP address value.
+                query = re.compile(r'(?!ip|cidr|addr|bind|host)([^;]\S)*?net',
+                                   re.IGNORECASE)
+                if query.search(re.escape(path_str)):
+                    continue
+
+            # Omit mappings in tht, like:
+            # [NetXxxMap, <... ,> {get_param: [ServiceNetMap, ...
+            if re.search(r'Map.*get\\_param', re.escape(path_str)):
+                continue
+
+            # For the remaining cases, verify if there is a template
+            # (like str_replace) with the expected format, which is
+            # containing hiera(param_name) interpolation
+            str_replace_pos = _getindex(path, 'str_replace')
+            params_pos = _getindex(path, 'params')
+            if str_replace_pos is None or params_pos is None:
+                print("ERROR: Missed hiera interpolation via str_replace "
+                      "in %s, role_data: %s"
+                      % (f, path))
+                failed = True
+                continue
+
+            # Get the name of the templated param, like NETWORK or $NETWORK
+            param_name = path[params_pos + 1]
+            str_replace = _get(tpl['outputs']['role_data'],
+                               path[:(str_replace_pos + 1)])
+            match_interp = re.search("%%\{hiera\(\S+%s\S+\)\}" %
+                                     re.escape(param_name),
+                                     str_replace['template'])
+            if str_replace['template'] is None or match_interp is None:
+                print("ERROR: Missed %%{hiera('... %s ...')} interpolation "
+                      "in str_replace['template'] "
+                      "in %s, role_data: %s" % (param_name, f, path))
+                failed = True
+                continue
+            # end processing this path and go for the next one
+
+    if failed:
+        return 1
+    else:
+        return 0
 
 def validate_upgrade_tasks_duplicate_whens(filename):
     """Take a heat template and starting at the upgrade_tasks
@@ -682,8 +904,8 @@ def validate_upgrade_tasks_duplicate_whens(filename):
             if '  when:' in line:
                 count += 1
                 if count > 1:
-                    print ("ERROR: found duplicate when statements in %s "
-                           "upgrade_task: %s %s" % (filename, line, duplicate))
+                    print("ERROR: found duplicate when statements in %s "
+                          "upgrade_task: %s %s" % (filename, line, duplicate))
                     return 1
                 duplicate = line
             elif ' -' in line:
@@ -715,6 +937,7 @@ def validate(filename, param_map):
                                 },
                                 ...
                            ]}
+    Returns a global retval that indicates any failures had been in the check progress.
     """
     if args.quiet < 1:
         print('Validating %s' % filename)
@@ -751,29 +974,33 @@ def validate(filename, param_map):
         if VALIDATE_PUPPET_OVERRIDE.get(filename, False) or (
                 filename.startswith('./puppet/services/') and
                 VALIDATE_PUPPET_OVERRIDE.get(filename, True)):
-            retval = validate_service(filename, tpl)
+            retval |= validate_service(filename, tpl)
 
+        if re.search(r'(puppet|docker)\/services', filename):
+            retval |= validate_service_hiera_interpol(filename, tpl)
 
         if filename.startswith('./docker/services/logging/'):
-            retval = validate_docker_logging_template(filename, tpl)
+            retval |= validate_docker_logging_template(filename, tpl)
         elif VALIDATE_DOCKER_OVERRIDE.get(filename, False) or (
                 filename.startswith('./docker/services/') and
                 VALIDATE_DOCKER_OVERRIDE.get(filename, True)):
-            retval = validate_docker_service(filename, tpl)
+            retval |= validate_docker_service(filename, tpl)
 
         if filename.endswith('hyperconverged-ceph.yaml'):
-            retval = validate_hci_compute_services_default(filename, tpl)
+            retval |= validate_hci_compute_services_default(filename, tpl)
 
         if filename.startswith('./roles/'):
-            retval = validate_role_name(filename)
+            retval |= validate_role_name(filename)
 
-        if filename.startswith('./roles/ComputeHCI.yaml'):
-            retval = validate_hci_computehci_role(filename, tpl)
+        if filename.startswith('./roles/ComputeHCI.yaml') or \
+                filename.startswith('./roles/ComputeHCIOvsDpdk.yaml'):
+            retval |= validate_hci_computehci_role(filename, tpl)
 
         if filename.startswith('./roles/ComputeOvsDpdk.yaml') or \
                 filename.startswith('./roles/ComputeSriov.yaml') or \
                 filename.startswith('./roles/ComputeOvsDpdkRT.yaml') or \
-                filename.startswith('./roles/ComputeSriovRT.yaml'):
+                filename.startswith('./roles/ComputeSriovRT.yaml') or \
+                filename.startswith('./roles/ComputeHCIOvsDpdk.yaml'):
             exclude = [
                 'OS::TripleO::Services::OVNController',
                 'OS::TripleO::Services::ComputeNeutronOvsAgent',
@@ -781,34 +1008,47 @@ def validate(filename, param_map):
                 'OS::TripleO::Services::NeutronVppAgent',
                 'OS::TripleO::Services::Vpp',
                 'OS::TripleO::Services::NeutronLinuxbridgeAgent']
-            retval = validate_with_compute_role_services(filename, tpl, exclude)
+            retval |= validate_with_compute_role_services(filename, tpl, exclude)
 
         if filename.startswith('./roles/ComputeRealTime.yaml'):
             exclude = [
                 'OS::TripleO::Services::Tuned',
             ]
-            retval = validate_with_compute_role_services(filename, tpl, exclude)
+            retval |= validate_with_compute_role_services(filename, tpl, exclude)
 
         if filename.startswith('./roles/Hci'):
-            retval = validate_hci_role(filename, tpl)
+            retval |= validate_hci_role(filename, tpl)
 
         if filename.startswith('./roles/Ceph'):
-            retval = validate_ceph_role(filename, tpl)
+            retval |= validate_ceph_role(filename, tpl)
 
         if filename.startswith('./roles/ControllerNoCeph.yaml'):
-            retval = validate_controller_no_ceph_role(filename, tpl)
+            retval |= validate_controller_no_ceph_role(filename, tpl)
+
+        if filename in ('./roles/ComputeLocalEphemeral.yaml',
+                        './roles/ComputeRBDEphemeral.yaml'):
+            retval |= validate_with_compute_role_services(filename, tpl)
 
         if filename == './roles/Compute.yaml':
             retval |= validate_multiarch_compute_roles(filename, tpl)
 
-        if filename.startswith('./network_data_'):
-            retval = validate_network_data_file(filename)
+        if filename in ('./roles/ComputeLocalEphemeral.yaml',
+                        './roles/ComputeRBDEphemeral.yaml'):
+            retval |= validate_with_compute_role_services(filename, tpl)
 
-        if retval == 0 and is_heat_template:
+        if filename.startswith('./network_data_'):
+            result = validate_network_data_file(filename)
+            retval |= result
+        else:
+            result = retval
+
+        if result == 0 and is_heat_template:
             # check for old style nic config files
-            retval = validate_nic_config_file(filename, tpl)
+            retval |= validate_nic_config_file(filename, tpl)
 
     except Exception:
+        if filename in ANSIBLE_TASKS_YAMLS:
+            return 0
         print(traceback.format_exc())
         return 1
     # yaml is OK, now walk the parameters and output a warning for unused ones

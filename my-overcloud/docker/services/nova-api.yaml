@@ -146,63 +146,11 @@ outputs:
               owner: nova:nova
               recurse: true
       docker_config_scripts:
-        nova_api_discover_hosts.sh:
-          mode: "0700"
-          content: |
-            #!/bin/bash
-            export OS_PROJECT_DOMAIN_NAME=$(crudini --get /etc/nova/nova.conf keystone_authtoken project_domain_name)
-            export OS_USER_DOMAIN_NAME=$(crudini --get /etc/nova/nova.conf keystone_authtoken user_domain_name)
-            export OS_PROJECT_NAME=$(crudini --get /etc/nova/nova.conf keystone_authtoken project_name)
-            export OS_USERNAME=$(crudini --get /etc/nova/nova.conf keystone_authtoken username)
-            export OS_PASSWORD=$(crudini --get /etc/nova/nova.conf keystone_authtoken password)
-            export OS_AUTH_URL=$(crudini --get /etc/nova/nova.conf keystone_authtoken auth_url)
-            export OS_AUTH_TYPE=password
-            export OS_IDENTITY_API_VERSION=3
-
-            echo "(cellv2) Running cell_v2 host discovery"
-            timeout=600
-            loop_wait=30
-            declare -A discoverable_hosts
-            for host in $(hiera -c /etc/puppet/hiera.yaml cellv2_discovery_hosts | sed -e '/^nil$/d' |  tr "," " "); do discoverable_hosts[$host]=1; done
-            timeout_at=$(( $(date +"%s") + ${timeout} ))
-            echo "(cellv2) Waiting ${timeout} seconds for hosts to register"
-            finished=0
-            while : ; do
-              for host in $(openstack -q compute service list -c 'Host' -c 'Zone' -f value | awk '$2 != "internal" { print $1 }'); do
-                if (( discoverable_hosts[$host] == 1 )); then
-                  echo "(cellv2) compute node $host has registered"
-                  unset discoverable_hosts[$host]
-                fi
-              done
-              finished=1
-              for host in "${!discoverable_hosts[@]}"; do
-                if (( ${discoverable_hosts[$host]} == 1 )); then
-                  echo "(cellv2) compute node $host has not registered"
-                  finished=0
-                fi
-              done
-              remaining=$(( $timeout_at - $(date +"%s") ))
-              if (( $finished == 1 )); then
-                echo "(cellv2) All nodes registered"
-                break
-              elif (( $remaining <= 0 )); then
-                echo "(cellv2) WARNING: timeout waiting for nodes to register, running host discovery regardless"
-                echo "(cellv2) Expected host list:" $(hiera -c /etc/puppet/hiera.yaml cellv2_discovery_hosts | sed -e '/^nil$/d' | sort -u |  tr ',' ' ')
-                echo "(cellv2) Detected host list:" $(openstack -q compute service list -c 'Host' -c 'Zone' -f value | awk '$2 != "internal" { print $1 }' | sort -u | tr '\n', ' ')
-                break
-              else
-                echo "(cellv2) Waiting ${remaining} seconds for hosts to register"
-                sleep $loop_wait
-              fi
-            done
-            echo "(cellv2) Running host discovery..."
-            su nova -s /bin/bash -c "/usr/bin/nova-manage cell_v2 discover_hosts --by-service --verbose"
-
         nova_api_ensure_default_cell.sh:
           mode: "0700"
           content: |
             #!/bin/bash
-            DEFID=$(nova-manage cell_v2 list_cells | sed -e '1,3d' -e '$d' | awk -F ' *| *' '$2 == "default" {print $4}')
+            DEFID=$(su nova -s /bin/bash -c "nova-manage cell_v2 list_cells" | sed -e '1,3d' -e '$d' | awk -F ' *| *' '$2 == "default" {print $4}')
             if [ "$DEFID" ]; then
               echo "(cellv2) Updating default cell_v2 cell $DEFID"
               su nova -s /bin/bash -c "/usr/bin/nova-manage cell_v2 update_cell --cell_uuid $DEFID --name=default"
@@ -210,6 +158,13 @@ outputs:
               echo "(cellv2) Creating default cell_v2 cell"
               su nova -s /bin/bash -c "/usr/bin/nova-manage cell_v2 create_cell --name=default"
             fi
+        nova_api_ensure_cell0_database_url.sh:
+          mode: "0700"
+          content:
+            str_replace:
+              template: su nova -s /bin/bash -c "nova-manage cell_v2 list_cells --verbose | grep 'CELL' || nova-manage cell_v2 update_cell --cell_uuid 00000000-0000-0000-0000-000000000000 --transport-url 'none:///' --database_connection='CELL'"
+              params:
+                CELL: {get_attr: [NovaApiBase, role_data, config_settings, "nova::cell0_database_connection"]}
       docker_config:
         step_2:
           get_attr: [NovaApiLogging, docker_config, step_2]
@@ -245,14 +200,27 @@ outputs:
               list_concat:
                 - *nova_api_bootstrap_volumes
                 -
-                  - /var/lib/config-data/nova/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
-                  - /var/lib/config-data/nova/etc/nova/:/etc/nova/:ro
                   - /var/log/containers/nova:/var/log/nova
+                  - /var/lib/config-data/puppet-generated/nova/:/var/lib/kolla/config_files/src:ro
                   - /var/lib/docker-config-scripts/nova_api_ensure_default_cell.sh:/nova_api_ensure_default_cell.sh:ro
             user: root
             command: "/usr/bin/bootstrap_host_exec nova_api /nova_api_ensure_default_cell.sh"
-          nova_db_sync:
+          nova_api_ensure_cell0_database_url:
             start_order: 3
+            image: *nova_api_image
+            net: host
+            detach: false
+            volumes:
+              list_concat:
+                - *nova_api_bootstrap_volumes
+                -
+                  - /var/log/containers/nova:/var/log/nova
+                  - /var/lib/config-data/puppet-generated/nova/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/docker-config-scripts/nova_api_ensure_cell0_database_url.sh:/nova_api_ensure_cell0_database_url.sh:ro
+            user: root
+            command: "/usr/bin/bootstrap_host_exec nova_api /nova_api_ensure_cell0_database_url.sh"
+          nova_db_sync:
+            start_order: 4
             image: *nova_api_image
             net: host
             detach: false
@@ -265,7 +233,7 @@ outputs:
             image: *nova_api_image
             net: host
             user: root
-            privileged: true
+            privileged: false
             restart: always
             healthcheck:
               test: /openstack/healthcheck
@@ -304,28 +272,6 @@ outputs:
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
         step_5:
-          nova_api_discover_hosts:
-            start_order: 1
-            image: *nova_api_image
-            net: host
-            detach: false
-            volumes:
-              list_concat:
-                - *nova_api_bootstrap_volumes
-                -
-                  - /var/lib/config-data/nova/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
-                  - /var/lib/config-data/nova/etc/nova/:/etc/nova/:ro
-                  - /var/log/containers/nova:/var/log/nova
-                  - /var/lib/docker-config-scripts/nova_api_discover_hosts.sh:/nova_api_discover_hosts.sh:ro
-            user: root
-            command: "/usr/bin/bootstrap_host_exec nova_api /nova_api_discover_hosts.sh"
-            environment:
-              # NOTE: this should force this container to re-run on each
-              # update (scale-out, etc.)
-              - list_join:
-                  - ''
-                  - - 'TRIPLEO_DEPLOY_IDENTIFIER='
-                    - {get_param: DeployIdentifier}
           nova_online_migrations:
             start_order: 2
             image: *nova_api_image
@@ -337,6 +283,19 @@ outputs:
       metadata_settings:
         get_attr: [NovaApiBase, role_data, metadata_settings]
       host_prep_tasks: {get_attr: [NovaApiLogging, host_prep_tasks]}
+      update_tasks:
+        - name: check at which step is nova_api_ensure_cell0_database_url
+          shell: "docker inspect nova_api_ensure_cell0_database_url|jq -r '.[]|.Config.Labels.config_id'"
+          ignore_errors: true
+          register: cell0_database_url_step
+          when:
+            - step|int == 1
+        - name: remove nova_api_ensure_cell0_database_url explicitly.
+          shell: "docker rm -fv nova_api_ensure_cell0_database_url"
+          when:
+            - step|int == 1
+            - cell0_database_url_step is succeeded
+            - cell0_database_url_step.stdout == 'tripleo_step5'
       upgrade_tasks:
         - when: step|int == 0
           tags: common
@@ -358,11 +317,6 @@ outputs:
               register: nova_api_httpd_enabled_result
             - set_fact:
                 nova_api_httpd_enabled: "{{ nova_api_httpd_enabled_result.rc == 0 }}"
-            - name: "PreUpgrade step0,validation: Check service openstack-nova-api is running"
-              command: systemctl is-active --quiet openstack-nova-api
-              tags: validation
-              when:
-                - nova_api_enabled|bool
             - name: Check if httpd service is running
               command: systemctl is-active --quiet httpd
               ignore_errors: True
@@ -371,12 +325,6 @@ outputs:
             - set_fact:
                 httpd_running: "{{ httpd_running_result.rc == 0 }}"
               when: httpd_running is undefined
-            - name: "PreUpgrade step0,validation: Check if nova_wsgi is running"
-              tags: validation
-              shell: systemctl status 'httpd' | grep -q 'nova'
-              when:
-                - nova_api_httpd_enabled|bool
-                - httpd_running|bool
             # NOTE: In puppet service variant, we ran release N online
             # migrations before upgrade to release N+1. In docker
             # service variant, we run release N online migrations
@@ -476,19 +424,17 @@ outputs:
             - name: Setup cell_v2 (map cell0)
               shell:
                 str_replace:
-                  template: nova-manage cell_v2 map_cell0 --database_connection=CELL
+                  template: nova-manage cell_v2 map_cell0 --database_connection='CELL'
                   params:
-                    CELL:
-                      make_url:
-                        scheme: {get_param: [EndpointMap, MysqlInternal, protocol]}
-                        username: nova
-                        password: {get_param: NovaPassword}
-                        host: {get_param: [EndpointMap, MysqlInternal, host]}
-                        path: /nova_cell0
+                    CELL: {get_attr: [NovaApiBase, role_data, config_settings, "nova::cell0_database_connection"]}
             - name: Setup cell_v2 (create default cell)
               # (owalsh) puppet-nova expects the cell name 'default'
               # (owalsh) pass the db uri explicitly to avoid https://bugs.launchpad.net/tripleo/+bug/1662344
-              shell: nova-manage cell_v2 create_cell --name='default' --database_connection=$(hiera nova::database_connection)
+              shell:
+                str_replace:
+                  template: nova-manage cell_v2 create_cell --name='default' --database_connection='CELL'
+                  params:
+                    CELL: {get_attr: [NovaApiBase, role_data, config_settings, "nova::database_connection"]}
               register: nova_api_create_cell
               failed_when: nova_api_create_cell.rc not in [0,2]
               changed_when: nova_api_create_cell.rc == 0
